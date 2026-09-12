@@ -40,7 +40,7 @@ The scene establishes the key and scale gradually. Keep the camera steady for a 
 | Mobile shared     | Back camera; one hand controls objects and the on-screen sliders control global volume and reverb.                                                             |
 | Local multiplayer | Open two tabs in the same browser, choose **Play together**, join the same room, and choose the appropriate hand roles. Use one audible tab to avoid doubling. |
 
-Two-device multiplayer requires a WebSocket relay; it is not hosted or bundled. See [Multiplayer MVP](#multiplayer-mvp) for the existing adapter and synchronization protocol.
+Two-device play is now bundled as **Remote mode**. See [LAN setup](#remote-mode--two-computers-on-the-same-wi-fi). The host serves the app, owns audio timing, and accepts a guest by custom room code.
 
 ### Useful commands
 
@@ -74,7 +74,7 @@ The app uses React, TypeScript, Tone.js, MediaPipe, and Vinext on Vite. Deploy `
 - In **Mobile shared**, the back camera is requested, every hand controls objects, and the master panel provides touch controls. Stop before changing camera mode or mirroring.
 - Use **Swap left and right** or global-only / object-only overrides if handedness is interpreted incorrectly. Skeletons are optional.
 
-Model files and WASM are downloaded from Google Storage / jsDelivr on first use. Camera images remain in this browser. HTTPS or localhost is required for camera access. Model download/network errors are surfaced; practice works without vision downloads (after the app and audio bundle load).
+Model files and WASM are downloaded from Google Storage / jsDelivr on first use. Camera images remain in this browser in solo/local-tab mode; Remote mode shares video with the room partner via WebRTC. HTTPS or localhost is required for camera access. Model download/network errors are surfaced; practice works without vision downloads (after the app and audio bundle load).
 
 ## Scene, rhythm, and comfortable gestures
 
@@ -92,22 +92,22 @@ Open **Your setup → Calibrate hand openness** with the live camera running. Ch
 
 `PerformanceController` orchestrates independent modules; the vision and gesture layers never import Tone.js.
 
-| Module                               | Responsibility                                                       |
-| ------------------------------------ | -------------------------------------------------------------------- |
-| CameraManager                        | Camera acquisition, facing mode, stream teardown                     |
-| ObjectRecognitionEngine              | MediaPipe EfficientDet inference, normalized boxes                   |
-| ObjectTracker                        | Label/proximity matching, observation stability, expiry              |
-| HandTrackingEngine                   | MediaPipe Hand Landmarker, up to four hands                          |
-| GestureInterpreter / handGeometry    | Palm-relative geometry, confidence gating, EMA                       |
-| GestureStateMachine                  | Explicit allowed transitions                                         |
-| ObjectSelectionManager               | Hover, fist dwell, link, release, mode hysteresis                    |
-| ChordProgressionEngine               | Scale-derived triads, scene worlds, phrase regeneration, queued keys |
-| MusicEngine                          | Tone transport, shared routing, metering and lifecycle               |
-| SoundObjectVoice / InstrumentManager | Persistent voices, per-object gain, glide                            |
-| GlobalMusicController                | Master controls, experimental key-angle dwell                        |
-| GameModeManager                      | Desktop / mobile camera and role behavior                            |
-| MultiplayerSyncManager               | Local BroadcastChannel room and optional WebSocket transport         |
-| UI / DebugPanel                      | Camera overlay, tether, settings, harmony, diagnostics               |
+| Module                                        | Responsibility                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| CameraManager                                 | Camera acquisition, facing mode, stream teardown                     |
+| ObjectRecognitionEngine                       | MediaPipe EfficientDet inference, normalized boxes                   |
+| ObjectTracker                                 | Label/proximity matching, observation stability, expiry              |
+| HandTrackingEngine                            | MediaPipe Hand Landmarker, up to four hands                          |
+| GestureInterpreter / handGeometry             | Palm-relative geometry, confidence gating, EMA                       |
+| GestureStateMachine                           | Explicit allowed transitions                                         |
+| ObjectSelectionManager                        | Hover, fist dwell, link, release, mode hysteresis                    |
+| ChordProgressionEngine                        | Scale-derived triads, scene worlds, phrase regeneration, queued keys |
+| MusicEngine                                   | Tone transport, shared routing, metering and lifecycle               |
+| SoundObjectVoice / InstrumentManager          | Persistent voices, per-object gain, glide                            |
+| GlobalMusicController                         | Master controls, experimental key-angle dwell                        |
+| GameModeManager                               | Desktop / mobile camera and role behavior                            |
+| MultiplayerSyncManager / RemoteSessionManager | Local tabs, LAN host/guest rooms, and partner WebRTC media           |
+| UI / DebugPanel                               | Camera overlay, tether, settings, harmony, diagnostics               |
 
 Audio routing: persistent object voices → per-object gain → music bus → dry master + reverb send → master gain → limiter → destination. All rhythmic notes and bar changes use Tone Transport. Vision runs independently at a maximum of 20 hand updates/second and approximately 2 object updates/second; UI/audio parameter updates run at approximately 12 Hz with audio ramps. Sustained notes attack once and ramp toward quantized scale targets, then release on exit.
 
@@ -124,7 +124,7 @@ The palette includes warm sine, triangle pluck, sub bass, FM bell, membrane drum
 
 Selection uses a smoothed four-finger closure score (0.72 to enter a fist, 0.45 to exit), followed by a 180 ms hold. A thumb/index pinch alone does not select. People remain recognized sound objects but are excluded from gesture targeting; click/tap their box or row to link explicitly. Both the selection cursor and vertical pitch use the palm center. Pinch distance remains palm-normalized for volume and open-away release (0.58 threshold). Mirroring is applied consistently to landmarks and object boxes. Each hand has its own tracked identity, smoothing, object lock, and tether (R1, R2, L1, L2). Two right hands can select different objects simultaneously. A linked right hand controls its object instead of the master. Tracking uses palm proximity and velocity; complete occlusion or ambiguous crossings can still lose identity.
 
-## Multiplayer MVP
+## Local-tab multiplayer and legacy relay adapter
 
 **Play together** joins a same-browser, same-origin local room via BroadcastChannel. Open another tab, enter the same room, choose global-only and object-only roles as needed, then start each experience. High-level controls are transmitted at at most 20 messages/second per hand. No images or landmark arrays are sent. Sliders transmit master controls when global-only controls are explicitly selected. Incoming messages are validated, stale/replayed controls are ignored, and remote object controls time out.
 
@@ -166,7 +166,7 @@ interface NetworkControlMessage {
 
 The existing relay must forward `kind: "presence"` and `kind: "world"` messages as well as controls. Presence includes role priority and is emitted every second; missing peers expire after five seconds. World messages include `snapshot: { epochId, world: { key, scale, quality, character, mood }, sequence, bpm, tick, effectiveAt }`. World payloads are validated and only the elected leader is accepted. Old control-message shape remains compatible; no pixels, crops, or hand landmark arrays are sent. Reconnecting/leaving a room clears authority and transport-follow state.
 
-Production multiplayer should still add server-validated room membership, rate limits, authoritative shared object IDs, and clock-offset/audio-latency estimation across devices. A relay server is not bundled; the local-room mock and WebSocket adapter satisfy the MVP scope.
+This legacy relay interface remains available for custom integrations. The bundled LAN mode below uses explicit host/guest membership, rate limits, separate guest voice IDs, and one audio clock; it does not use the local-tab leader election or cursor-relay behavior.
 
 ## Validation and limits
 
@@ -181,10 +181,52 @@ Lint is scoped to application code and tests; the generated, unused UI catalog i
 
 Unit tests cover persistent tracking, same-class matching, noisy selection, free/release hysteresis, hand loss, bar/phrase boundaries, logarithmic pitch, key dwell, role override, smoothing, and message validation. Additional tests cover all scene-to-mode rules, all triads in all supported scales, scene lock/dwell, exposure-invariant motion, rhythm stability, quantized pitch and endpoints, calibration capture/persistence, deterministic authority, world payload validation and live BroadcastChannel late-join delivery. Real camera performance and audible gesture latency still require hands-on device testing; automated checks do not establish recognition quality or subjective audio quality.
 
-Inference uses throttled main-thread MediaPipe CPU calls for compatibility. Low-end phones may drop frames; a worker-based inference adapter is the next performance improvement. No recording, camera upload, person identity tracking, or production room server is included.
+Inference uses throttled main-thread MediaPipe CPU calls for compatibility. Low-end phones may drop frames; a worker-based inference adapter is the next performance improvement. No recording or person identity recognition is included. The LAN room server is intended for a trusted local network; remote video is peer-to-peer. Public internet rooms with accounts, TURN relaying, and persistent sessions are outside this implementation.
 
 API references: [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js), [MediaPipe Object Detector](https://ai.google.dev/edge/mediapipe/solutions/vision/object_detector/web_js), [Tone Transport](https://github.com/Tonejs/Tone.js/wiki/Transport), [Tone instruments](https://github.com/Tonejs/Tone.js/wiki/Instruments).
 
 ### Two people, one camera
 
 Keep Hand roles on Automatic. Each player places a palm over a different object and holds a fist to grab it. Right hands work too. Each LINKED label and tether identifies its controlling hand. Spread thumb/index for individual dynamics, expand for sustain, and move vertically for pitch. Open the pinch away from the object to detach. A held object cannot be stolen by another hand. Global-only role overrides intentionally disable grabbing; mobile and object-only roles allow every hand to control objects.
+
+## Remote mode — two computers on the same Wi-Fi
+
+The host computer runs a small HTTPS/WebSocket room server and the **only Tone.js transport**. Both computers load the app from that host. Each browser detects its own hands and objects locally. The guest sends bounded sound-object parameters; the host creates separate guest voices and plays both sets of objects against the same harmony and beat. This is note/pattern synchronization inside Tone.js, not external hardware MIDI.
+
+Camera video is shared directly between the two browsers using WebRTC. The host also shares its post-limiter audio mix; the guest can press **Listen to host audio**. The microphone is never requested. Use headphones or leave guest listening muted when both computers are in the same room. Listening includes WebRTC/network latency, while all synth scheduling remains on the host.
+
+### One-time HTTPS setup
+
+Camera access on a LAN IP requires a **trusted HTTPS connection**. Merely opening `http://192.168…` will not enable camera tracking. Install [mkcert](https://github.com/FiloSottile/mkcert#installation) on the host, identify its current Wi-Fi IPv4 address, and replace `192.168.1.42` below with that address:
+
+```bash
+npm install
+mkcert -install
+mkdir -p .cert
+mkcert -cert-file .cert/lan.pem -key-file .cert/lan-key.pem localhost 127.0.0.1 192.168.1.42
+npm run build
+npm run lan
+```
+
+On the guest, install the **public `rootCA.pem` certificate** from the host’s `mkcert -CAROOT` directory into the operating system/browser trust store (mkcert documents this under [installing the CA on other systems](https://github.com/FiloSottile/mkcert#installing-the-ca-on-other-systems)). Do not copy `rootCA-key.pem` or the host server’s private key. Certificates are excluded from Git. If the host IP changes, regenerate its server certificate for the new address.
+
+The server prints the guest URL, for example `https://192.168.1.42:8443`. Open that **same URL on both computers**. The guest does not need Node.js or a project checkout. Allow the host’s firewall to accept this server on the local network. Guest Wi-Fi/client isolation must be off so the two browsers can communicate directly. Internet access is still needed for the initial vision-model downloads.
+
+### Play a remote duet
+
+1. On the host: **Play together → Remote · two computers**. Enter a custom code such as `FRIDAY-DUO` and press **Host room**.
+2. On the guest: open the host’s LAN URL, enter the same code, and press **Join as guest**. Codes are case-insensitive, 4–32 characters, and allow letters, numbers, hyphens, and underscores. A room admits one host and one guest.
+3. Press **Start Experience on both computers** and allow each camera. A partner video panel appears below the local performance view. Joining/switching rooms stops the previous experience so audio ownership changes safely.
+4. Each player fist-grabs objects in **their own camera view** and controls them independently. The host renders both players’ objects. Unlinked global-control hands or sliders can change the shared mix; host gestures take over when actively controlling the same parameter.
+5. The host chooses harmony, tempo, and progression. The guest displays the host’s musical world and can optionally listen to the host audio stream.
+6. **Leave room** disconnects video. A departing guest’s voices are removed; lost object updates expire after 1.2 seconds. If the host leaves, the room closes and guest audio stops. Rejoin explicitly after a network failure; guests never silently become audio hosts.
+
+The hosted Sites/GitHub version has the remote controls but does **not** run your LAN server. Remote buttons become available when the app is opened from `npm run lan`; a room code alone cannot discover a computer’s address. This intentionally avoids a cloud signaling service. The existing **Local · two browser tabs** mode remains available independently.
+
+Advanced server settings: `LAN_PORT` (default `8443`), `LAN_CERT` and `LAN_KEY` (default `.cert/lan.pem` and `.cert/lan-key.pem`). `LAN_HTTP=1` is for localhost development/testing only; it does not solve LAN camera permissions. The server serves only `dist/client`, checks WebSocket origins, limits payloads/rates, separates rooms, and only accepts musical-world updates from the registered host. Rooms are temporary; the code grants access, so share it only with the intended partner.
+
+### Custom key type
+
+Under **Master controls → Tonal system**, choose **Custom key & scale**. Select any of the 12 tonics and Major/Ionian, Natural Minor, Harmonic Minor, Melodic Minor, Dorian, Phrygian, Lydian, Mixolydian, or Aeolian. Changes are queued at a four-bar phrase boundary; chord playback and sustained melodic pitch use the same scale. Manual selection holds against scene reinterpretation and experimental gesture key changes. Switch back to **Scene-driven harmony** to resume stable visual interpretation. In remote mode only the host can change the tonal system.
+
+Remote implementation: `server/lan.ts` serves HTTPS/WSS; `server/rooms.ts` manages host/guest membership; `RemoteSessionManager` handles signaling and partner media; `remoteProtocol.ts` validates guest voices and host world state. Video travels via WebRTC, never through object/gesture recognition on the partner device. Automated coverage includes real WebSocket room isolation, roles, full-room rejection, departure/rejoin, guest startup without Tone.js, parameter validation, and custom tonal systems. Physical two-computer camera/video/audio behavior still needs hardware testing.

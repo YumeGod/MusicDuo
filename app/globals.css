@@ -2621,3 +2621,49 @@ body {
     background: #1c2c3b;
   }
 }
+
+/* Remote duet: keep the local camera dominant. */
+.remote-actions,
+.tonal-choices {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tonal-choices .choice {
+  flex: 1;
+  min-width: 120px;
+}
+.partner-view {
+  position: relative;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 22px;
+  background: rgba(25, 30, 39, 0.65);
+  backdrop-filter: blur(18px);
+}
+.partner-view video {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  min-height: 140px;
+  object-fit: contain;
+  background: #10141b;
+}
+.partner-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  font-size: 12px;
+  color: #bac5d0;
+}
+.partner-caption b {
+  color: #f1f5f9;
+}
+.partner-view .button {
+  margin: 0 16px 14px;
+}
+.tonal-choices {
+  margin: 10px 0 18px;
+}

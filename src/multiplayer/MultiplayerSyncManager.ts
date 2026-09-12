@@ -1,3 +1,4 @@
+import { RemoteSessionManager } from './RemoteSessionManager';
 import type {
   NetworkControlMessage,
   PresenceMessage,
@@ -7,6 +8,7 @@ import type { WorldSyncSnapshot } from '../types';
 import { validEnvelope } from './protocol';
 import { WorldAuthority } from './WorldAuthority';
 export class MultiplayerSyncManager {
+  lan = new RemoteSessionManager();
   private channel?: BroadcastChannel;
   private socket?: WebSocket;
   private lastSent = new Map<string, number>();
@@ -21,6 +23,7 @@ export class MultiplayerSyncManager {
   priority = () => 1;
   private election = new WorldAuthority(this.playerId, () => this.priority());
   isAuthority() {
+    if (this.lan.role) return this.lan.role === 'host';
     return (
       !this.connected || this.election.leader(Date.now()) === this.playerId
     );
@@ -152,6 +155,7 @@ export class MultiplayerSyncManager {
     });
   }
   disconnect() {
+    this.lan.disconnect();
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = undefined;
     this.channel?.close();

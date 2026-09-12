@@ -1,5 +1,8 @@
 'use client';
 import Link from 'next/link';
+import { PartnerVideo } from '../components/PartnerVideo';
+import { SCALES, NOTE_NAMES } from '../audio/harmony';
+import type { ScaleId } from '../types';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
@@ -45,9 +48,13 @@ import { AudioScope } from '../components/AudioScope';
 import { DebugPanel } from '../components/DebugPanel';
 import { Choice, Range, Toggle } from '../components/Controls';
 import { INSTRUMENTS } from '../config/objectSoundMap';
-import { KEYS, MUSIC } from '../config/musicConfig';
+import { MUSIC } from '../config/musicConfig';
 import type { GameMode, InstrumentId, RoleOverride } from '../types';
 const initial: Snapshot = {
+  remoteStatus: 'Not connected',
+  remoteConnected: false,
+  guestVoiceCount: 0,
+  manualTonality: false,
   running: false,
   loading: false,
   practice: false,
@@ -84,7 +91,19 @@ export default function MusicDuo() {
     [override, setOverride] = useState<RoleOverride>('AUTO'),
     [keyGesture, setKeyGesture] = useState(false),
     [room, setRoom] = useState('studio-01'),
+    [connectionMode, setConnectionMode] = useState('lan'),
+    [lanAvailable, setLanAvailable] = useState(false),
     [guide, setGuide] = useState(false);
+  useEffect(() => {
+    void fetch('/api/lan')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) =>
+        setLanAvailable(
+          Boolean(v && typeof v === 'object' && 'lan' in v && v.lan === true),
+        ),
+      )
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     if (!video.current) return;
     const c = new PerformanceController(video.current, setS);
@@ -100,7 +119,7 @@ export default function MusicDuo() {
     [],
   );
   const selected = s.objects.find((o) => o.id === s.selectedId);
-  const activeKey = Math.max(0, KEYS.indexOf(s.harmony.key));
+  const activeKey = Math.max(0, NOTE_NAMES.indexOf(s.harmony.key));
   const switchMode = (value: string) => {
     const m = value as GameMode;
     setMode(m);
@@ -113,7 +132,7 @@ export default function MusicDuo() {
   const start = (practice = false) => void controller.current?.start(practice);
   const keyStep = (delta: number) =>
     controller.current?.key(
-      KEYS[(activeKey + delta + KEYS.length) % KEYS.length],
+      NOTE_NAMES[(activeKey + delta + NOTE_NAMES.length) % NOTE_NAMES.length],
     );
   return (
     <div className="musicduo dark">
@@ -176,11 +195,35 @@ export default function MusicDuo() {
             <DialogContent className="duo-dialog">
               <DialogTitle>A shared room for two</DialogTitle>
               <DialogDescription>
-                The MVP connects tabs on this browser using a local room. One
-                device leads the scene; key, mode, chords, and mood follow that
-                shared world. Two-device networking uses the existing WebSocket
-                adapter.
+                Remote mode connects two computers on the same Wi-Fi. The host
+                plays both players’ instruments on one clock. Each camera
+                recognizes its own gestures; video is shared directly with your
+                partner.
               </DialogDescription>
+              <Choice
+                label="Connection mode"
+                value={connectionMode}
+                options={[
+                  { value: 'lan', label: 'Remote · two computers' },
+                  { value: 'local', label: 'Local · two browser tabs' },
+                ]}
+                onChange={setConnectionMode}
+              />
+              {connectionMode === 'lan' && !lanAvailable && (
+                <p className="muted">
+                  Open the host computer’s HTTPS LAN address on both computers
+                  first. The host runs <code>npm run lan</code> after the
+                  one-time setup in the{' '}
+                  <a
+                    href="https://github.com/YumeGod/MusicDuo#remote-mode--two-computers-on-the-same-wi-fi"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    README
+                  </a>
+                  .
+                </p>
+              )}
               <label className="field">
                 Room name
                 <input
@@ -211,28 +254,49 @@ export default function MusicDuo() {
                     controller.current.override = v as RoleOverride;
                 }}
               />
-              <button
-                className="button primary"
-                disabled={!room.trim()}
-                onClick={() => controller.current?.connect(room.trim())}
-              >
-                <Link2 size={16} />
-                Join local room
-              </button>
+              {connectionMode === 'lan' ? (
+                <div className="remote-actions">
+                  <button
+                    className="button primary"
+                    disabled={!lanAvailable || !room.trim() || s.loading}
+                    onClick={() =>
+                      controller.current?.connectRemote('host', room)
+                    }
+                  >
+                    Host room
+                  </button>
+                  <button
+                    className="button secondary"
+                    disabled={!lanAvailable || !room.trim() || s.loading}
+                    onClick={() =>
+                      controller.current?.connectRemote('guest', room)
+                    }
+                  >
+                    Join as guest
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="button primary"
+                  disabled={!room.trim()}
+                  onClick={() => controller.current?.connect(room.trim())}
+                >
+                  <Link2 size={16} />
+                  Join local room
+                </button>
+              )}
               <button
                 className="text-button"
                 onClick={() => controller.current?.disconnect()}
               >
                 Leave room
               </button>
-              <p className="muted">
-                {s.network}. Open this site in another tab and join the same
-                room with the other role. Start audio in each tab; use one
-                audible tab to avoid doubling.{' '}
-                {s.sceneAuthority
-                  ? 'This device leads harmony.'
-                  : 'Following the room’s harmony.'}
-              </p>
+              <output className="muted">
+                {connectionMode === 'lan' ? s.remoteStatus : s.network}.{' '}
+                {connectionMode === 'lan'
+                  ? 'Create or join the room, then press Start Experience on each computer. Only the host runs Tone.js.'
+                  : 'Start each tab and keep only one audible.'}
+              </output>
             </DialogContent>
           </Dialog>
         </div>
@@ -363,7 +427,9 @@ export default function MusicDuo() {
                     </button>
                     <div className="privacy-note">
                       <span className="tiny-dot" />
-                      Camera stays on your device. Headphones recommended.
+                      {s.remoteRole
+                        ? 'Your camera is shared with your room partner. Microphone stays off.'
+                        : 'Camera stays on your device. Headphones recommended.'}
                     </div>
                   </div>
                 )}
@@ -608,6 +674,13 @@ export default function MusicDuo() {
                 </div>
               </section>
             )}
+            {s.remoteRole && (
+              <PartnerVideo
+                role={s.remoteRole}
+                stream={s.partnerStream}
+                status={s.remoteStatus}
+              />
+            )}
             <DebugPanel s={s} />
           </div>
           <aside className="control-column">
@@ -622,6 +695,62 @@ export default function MusicDuo() {
                 </span>
               </div>
               <div className="control-inner">
+                {s.remoteRole && (
+                  <p className="setting-hint">
+                    {s.remoteRole === 'host'
+                      ? `Host audio · ${s.guestVoiceCount} guest voices`
+                      : 'Guest · instruments play on the host'}
+                  </p>
+                )}
+                <span className="field-label">TONAL SYSTEM</span>
+                <Choice
+                  label="Harmony source"
+                  value={s.manualTonality ? 'manual' : 'scene'}
+                  disabled={!s.sceneAuthority}
+                  options={[
+                    { value: 'scene', label: 'Scene-driven harmony' },
+                    { value: 'manual', label: 'Custom key & scale' },
+                  ]}
+                  onChange={(v) =>
+                    controller.current?.setTonality(v === 'manual')
+                  }
+                />
+                {s.manualTonality && (
+                  <div className="tonal-choices">
+                    <Choice
+                      label="Custom tonic"
+                      disabled={!s.sceneAuthority}
+                      value={s.requestedKey ?? s.harmony.key}
+                      options={NOTE_NAMES.map((value) => ({
+                        value,
+                        label: value,
+                      }))}
+                      onChange={(v) =>
+                        controller.current?.setTonality(
+                          true,
+                          v,
+                          s.requestedScale ?? s.harmony.scale,
+                        )
+                      }
+                    />
+                    <Choice
+                      label="Key type / scale"
+                      disabled={!s.sceneAuthority}
+                      value={s.requestedScale ?? s.harmony.scale}
+                      options={Object.entries(SCALES).map(([value, v]) => ({
+                        value,
+                        label: value === 'ionian' ? 'Major / Ionian' : v.name,
+                      }))}
+                      onChange={(v) =>
+                        controller.current?.setTonality(
+                          true,
+                          s.requestedKey ?? s.harmony.key,
+                          v as ScaleId,
+                        )
+                      }
+                    />
+                  </div>
+                )}
                 <Range
                   label="Master dynamics"
                   value={s.volume}

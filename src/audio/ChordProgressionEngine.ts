@@ -26,6 +26,7 @@ export class ChordProgressionEngine {
     this.pendingKey = key;
   }
   requestWorld(world: MusicalWorld) {
+    this.pendingKey = undefined;
     this.pendingWorld = structuredClone(world);
   }
   sequence() {

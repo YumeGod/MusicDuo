@@ -14,6 +14,7 @@ export class MusicEngine {
   private limiter?: Tone.Limiter;
   private waveform?: Tone.Waveform;
   private event?: number;
+  private capture?: MediaStreamAudioDestinationNode;
   private step = 0;
   private objects: SoundObject[] = [];
   private worldClock = new WorldPlaybackClock();
@@ -26,6 +27,8 @@ export class MusicEngine {
     await Tone.start();
     if (this.running) return;
     this.limiter = new Tone.Limiter(-2).toDestination();
+    this.capture = Tone.getContext().createMediaStreamDestination();
+    this.limiter.connect(this.capture);
     this.master = new Tone.Gain(MUSIC.volume * MUSIC.maxGain).connect(
       this.limiter,
     );
@@ -68,6 +71,9 @@ export class MusicEngine {
     this.running = true;
     transport.start('+0.05');
   }
+  get audioStream() {
+    return this.capture?.stream;
+  }
   sync(objects: SoundObject[]) {
     this.objects = objects;
     this.instruments?.sync(objects, this.harmony.state());
@@ -91,6 +97,9 @@ export class MusicEngine {
   }
   dispose() {
     this.running = false;
+    this.capture?.stream.getTracks().forEach((t) => t.stop());
+    this.capture?.disconnect();
+    this.capture = undefined;
     const transport = Tone.getTransport();
     transport.stop();
     transport.position = 0;

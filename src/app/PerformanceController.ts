@@ -1,3 +1,6 @@
+import { manualWorld } from '../audio/manualTonality';
+import { guestVoices, type RemoteRole } from '../multiplayer/remoteProtocol';
+import type { ScaleId } from '../types';
 import type {
   GameMode,
   HandObjectLink,
@@ -30,6 +33,14 @@ import {
 } from '../gestures/ExpansionCalibration';
 import { ChordProgressionEngine } from '../audio/ChordProgressionEngine';
 export interface Snapshot {
+  remoteRole?: RemoteRole;
+  partnerStream?: MediaStream;
+  remoteStatus: string;
+  remoteConnected: boolean;
+  guestVoiceCount: number;
+  manualTonality: boolean;
+  requestedKey?: string;
+  requestedScale?: ScaleId;
   running: boolean;
   loading: boolean;
   practice: boolean;
@@ -54,6 +65,10 @@ export interface Snapshot {
 }
 export class PerformanceController {
   music?: MusicEngine;
+  private guestObjects: SoundObject[] = [];
+  private guestSeen = 0;
+  private manual?: { key: string; scale: ScaleId };
+  private remoteManual = false;
   camera = new CameraManager();
   tracker = new ObjectTracker();
   selections = new MultiHandSelectionManager();
@@ -101,6 +116,25 @@ export class PerformanceController {
     private video: HTMLVideoElement,
     private publish: (s: Snapshot) => void,
   ) {
+    this.network.lan.onChange = () => {
+      if (!this.network.lan.peerPresent) this.guestObjects = [];
+      this.emit();
+    };
+    this.network.lan.onPacket = (packet) => {
+      if (packet.type === 'objects' && this.network.lan.role === 'host') {
+        this.guestSeen = performance.now();
+        this.guestObjects = guestVoices(packet.objects, this.guestSeen);
+      } else if (packet.type === 'world' && this.network.lan.role === 'guest') {
+        this.lastWorld = packet.snapshot;
+        this.harmony = new ChordProgressionEngine().follow(packet.snapshot);
+        this.global.volume = packet.volume;
+        this.global.reverb = packet.reverb;
+        this.remoteManual = packet.manual;
+      } else if (packet.type === 'global' && this.network.lan.role === 'host') {
+        this.global.volume = packet.volume;
+        this.global.reverb = packet.reverb;
+      }
+    };
     this.network.priority = () =>
       this.override === 'GLOBAL_CONTROLLER'
         ? 0
@@ -122,6 +156,19 @@ export class PerformanceController {
   }
   emit() {
     this.publish({
+      remoteRole: this.network.lan.role,
+      remoteStatus: this.network.lan.status,
+      remoteConnected: this.network.lan.connected,
+      partnerStream: this.network.lan.remoteStream,
+      guestVoiceCount: this.guestObjects.length,
+      manualTonality:
+        this.network.lan.role === 'guest'
+          ? this.remoteManual
+          : Boolean(this.manual),
+      requestedKey:
+        this.network.lan.role === 'guest' ? undefined : this.manual?.key,
+      requestedScale:
+        this.network.lan.role === 'guest' ? undefined : this.manual?.scale,
       running: this.running,
       loading: this.loading,
       practice: this.practice,
@@ -139,7 +186,9 @@ export class PerformanceController {
       volume: this.global.volume,
       reverb: this.global.reverb,
       fps: this.fps,
-      network: this.networkStatus,
+      network: this.network.lan.role
+        ? this.network.lan.status
+        : this.networkStatus,
       sceneMood: this.network.isAuthority()
         ? (this.scene.smoothed ?? DEFAULT_MOOD)
         : this.harmony.sceneMood,
@@ -163,31 +212,49 @@ export class PerformanceController {
     this.status = 'Preparing your instrument…';
     this.emit();
     try {
-      const { MusicEngine } = await import('../audio/MusicEngine');
-      if (generation !== this.generation) return;
-      const music = new MusicEngine();
-      this.music = music;
-      if (this.lastWorld) music.harmony.follow(this.lastWorld, 0);
-      music.harmony.key = this.harmony.key;
-      music.harmony.bpm = this.harmony.bpm;
-      if (this.scene.locked) music.harmony.requestWorld(this.scene.locked);
-      if (this.remoteWorld && !this.network.isAuthority())
-        music.followWorld(this.remoteWorld);
-      await music.start(
-        (h) => {
-          this.harmony = h;
-        },
-        (snapshot) => {
-          this.lastWorld = snapshot;
-          this.network.sendWorld(snapshot);
-        },
-      );
-      if (generation !== this.generation) {
-        music.dispose();
-        return;
+      if (this.network.lan.role !== 'guest') {
+        const { MusicEngine } = await import('../audio/MusicEngine');
+        if (generation !== this.generation) return;
+        const music = new MusicEngine();
+        this.music = music;
+        if (this.lastWorld) music.harmony.follow(this.lastWorld, 0);
+        music.harmony.key = this.harmony.key;
+        music.harmony.bpm = this.harmony.bpm;
+        if (this.manual) {
+          music.harmony.key = this.manual.key;
+          music.harmony.world = manualWorld(
+            music.harmony.world,
+            this.manual.key,
+            this.manual.scale,
+          );
+        } else if (this.scene.locked)
+          music.harmony.requestWorld(this.scene.locked);
+        if (this.remoteWorld && !this.network.isAuthority())
+          music.followWorld(this.remoteWorld);
+        await music.start(
+          (h) => {
+            this.harmony = h;
+          },
+          (snapshot) => {
+            this.lastWorld = snapshot;
+            this.network.sendWorld(snapshot);
+            this.network.lan.send({
+              type: 'world',
+              snapshot,
+              volume: this.global.volume,
+              reverb: this.global.reverb,
+              manual: Boolean(this.manual),
+            });
+          },
+        );
+        if (generation !== this.generation) {
+          music.dispose();
+          return;
+        }
       }
       this.running = true;
-      this.music.controls(this.global.volume, this.global.reverb);
+      this.music?.controls(this.global.volume, this.global.reverb);
+      this.refreshRemoteMedia();
       if (practice) this.seedPractice();
       else {
         this.cameraStatus = 'Requesting camera…';
@@ -213,6 +280,7 @@ export class PerformanceController {
           this.emit();
           return;
         }
+        this.refreshRemoteMedia();
         this.cameraStatus = 'Camera live · loading vision';
         this.status = 'Loading hand and object recognition…';
         this.emit();
@@ -315,7 +383,7 @@ export class PerformanceController {
         if (now - this.lastScene >= SCENE.sampleMs) {
           this.lastScene = now;
           const mood = this.sceneAnalysis.sample(this.video, this.objects());
-          if (mood && this.network.isAuthority()) {
+          if (mood && this.network.isAuthority() && !this.manual) {
             const world = this.scene.update(mood, now);
             if (world) {
               this.music?.harmony.requestWorld(world);
@@ -379,6 +447,16 @@ export class PerformanceController {
             : GameModeManager.role(hand, this.mode, this.override);
         if (role === 'GLOBAL_CONTROLLER' && !hand.isSelecting && !global)
           global = hand;
+        if (
+          this.network.lan.role === 'guest' &&
+          role === 'GLOBAL_CONTROLLER' &&
+          !hand.isSelecting
+        )
+          this.network.lan.send({
+            type: 'global',
+            volume: Math.min(1, hand.pinchDistance / 1.2),
+            reverb: hand.handExpansion,
+          });
         this.network.send({
           role,
           controls: {
@@ -403,13 +481,16 @@ export class PerformanceController {
       global = remoteGlobal?.hand ?? global;
       if (global) {
         const key = this.global.update(global, now);
-        if (key && this.network.isAuthority())
+        if (key && this.network.isAuthority() && !this.manual)
           this.music?.harmony.requestKey(key);
       }
     }
     if (now - this.lastUI > 80) {
       this.lastUI = now;
-      this.music?.sync(this.objects());
+      if (now - this.guestSeen > 1200) this.guestObjects = [];
+      if (this.network.lan.role === 'guest')
+        this.network.lan.send({ type: 'objects', objects: this.objects() });
+      this.music?.sync([...this.objects(), ...this.guestObjects]);
       this.music?.controls(this.global.volume, this.global.reverb);
       this.emit();
     }
@@ -476,6 +557,8 @@ export class PerformanceController {
   controls(volume: number, reverb: number) {
     this.global.volume = volume;
     this.global.reverb = reverb;
+    if (this.network.lan.role === 'guest')
+      this.network.lan.send({ type: 'global', volume, reverb });
     if (this.override === 'GLOBAL_CONTROLLER')
       this.network.send({
         role: 'GLOBAL_CONTROLLER',
@@ -484,8 +567,57 @@ export class PerformanceController {
     this.music?.controls(volume, reverb);
     this.emit();
   }
+  private refreshRemoteMedia() {
+    this.network.lan.setMedia(
+      typeof MediaStream !== 'undefined' &&
+        this.video.srcObject instanceof MediaStream
+        ? this.video.srcObject
+        : undefined,
+      this.music?.audioStream,
+    );
+  }
+  connectRemote(role: RemoteRole, room: string) {
+    // Change audio ownership before a guest can start a local transport.
+    this.stop();
+    this.network.disconnect();
+    this.remotes.clear();
+    this.remoteWorld = undefined;
+    this.network.lan.connect(role, room);
+    this.emit();
+  }
+  setTonality(
+    enabled: boolean,
+    key = this.manual?.key ?? this.harmony.key,
+    scale = this.manual?.scale ?? this.harmony.scale,
+  ) {
+    if (!this.network.isAuthority()) return;
+    if (!enabled) {
+      this.manual = undefined;
+      this.scene.reanalyze();
+      this.status = 'Scene-driven harmony restored.';
+    } else {
+      const base =
+        this.music?.harmony.world ?? new ChordProgressionEngine().world;
+      const world = manualWorld(base, key, scale);
+      this.manual = { key, scale };
+      if (this.running) this.music?.harmony.requestWorld(world);
+      else {
+        const h = new ChordProgressionEngine();
+        h.world = world;
+        h.key = key;
+        h.bpm = this.harmony.bpm;
+        this.harmony = h.state();
+      }
+      this.status = `${key} ${scale.replaceAll('_', ' ')}${this.running ? ' queued for the next phrase.' : ' selected.'}`;
+    }
+    this.emit();
+  }
   key(key: string) {
     if (!this.network.isAuthority()) return;
+    if (this.manual) {
+      this.setTonality(true, key, this.manual.scale);
+      return;
+    }
     if (this.running) {
       this.music?.harmony.requestKey(key);
       this.status = `${key} ${this.harmony.mode} queued for the next bar.`;
@@ -552,6 +684,7 @@ export class PerformanceController {
     this.emit();
   }
   connect(room: string) {
+    if (this.network.lan.role) this.stop();
     this.music?.releaseWorld();
     this.remoteWorld = undefined;
     this.remotes.clear();
@@ -608,6 +741,7 @@ export class PerformanceController {
     );
   }
   disconnect() {
+    if (this.network.lan.role) this.stop();
     this.network.disconnect();
     this.music?.releaseWorld();
     this.remoteWorld = undefined;
@@ -623,6 +757,9 @@ export class PerformanceController {
     this.loading = false;
     this.music?.dispose();
     this.music = undefined;
+    this.network.lan.send({ type: 'objects', objects: [] });
+    this.network.lan.setMedia();
+    this.guestObjects = [];
     this.camera.stop();
     this.handEngine?.dispose();
     this.objectEngine?.dispose();
