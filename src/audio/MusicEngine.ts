@@ -1,8 +1,9 @@
 import * as Tone from 'tone';
-import type { HarmonyState, SoundObject } from '../types';
+import type { HarmonyState, SoundObject, WorldSyncSnapshot } from '../types';
 import { MUSIC } from '../config/musicConfig';
 import { ChordProgressionEngine } from './ChordProgressionEngine';
 import { InstrumentManager } from './InstrumentManager';
+import { WorldPlaybackClock } from '../multiplayer/WorldPlaybackClock';
 export class MusicEngine {
   harmony = new ChordProgressionEngine();
   private instruments?: InstrumentManager;
@@ -15,8 +16,13 @@ export class MusicEngine {
   private event?: number;
   private step = 0;
   private objects: SoundObject[] = [];
+  private worldClock = new WorldPlaybackClock();
+  private epochId = crypto.randomUUID();
   running = false;
-  async start(onBeat: (h: HarmonyState) => void) {
+  async start(
+    onBeat: (h: HarmonyState) => void,
+    onWorld?: (s: WorldSyncSnapshot) => void,
+  ) {
     await Tone.start();
     if (this.running) return;
     this.limiter = new Tone.Limiter(-2).toDestination();
@@ -32,23 +38,45 @@ export class MusicEngine {
     this.waveform = new Tone.Waveform(128);
     this.master.connect(this.waveform);
     this.instruments = new InstrumentManager(this.bus);
-    this.instruments.sync(this.objects);
+    this.instruments.sync(this.objects, this.harmony.state());
     const transport = Tone.getTransport();
-    transport.bpm.value = this.harmony.bpm;
+    transport.bpm.value = this.worldClock.bpm ?? this.harmony.bpm;
     this.event = transport.scheduleRepeat((time) => {
-      const h = this.harmony.advance(this.step);
-      this.instruments?.play(this.objects, h.chordNotes, this.step, time);
-      this.step++;
+      const wallTime = Date.now() + (time - Tone.now()) * 1000;
+      let tick = this.step;
+      let h: HarmonyState;
+      if (this.worldClock.following) {
+        const remote = this.worldClock.at(wallTime);
+        if (!remote) return;
+        tick = remote.tick;
+        if (transport.bpm.value !== remote.snapshot.bpm)
+          transport.bpm.value = remote.snapshot.bpm;
+        h = this.harmony.follow(remote.snapshot, tick);
+      } else
+        h =
+          tick % 4 === 0
+            ? this.harmony.advance(Math.floor(tick / 4))
+            : this.harmony.state();
+      this.instruments?.play(this.objects, h, tick, time);
+      this.step = tick + 1;
+      if (tick % 4 === 0 && !this.worldClock.following)
+        onWorld?.(this.harmony.snapshot(tick, wallTime, this.epochId));
       Tone.getDraw().schedule(() => {
         if (this.running) onBeat(h);
       }, time);
-    }, '4n');
+    }, '16n');
     this.running = true;
     transport.start('+0.05');
   }
   sync(objects: SoundObject[]) {
     this.objects = objects;
-    this.instruments?.sync(objects);
+    this.instruments?.sync(objects, this.harmony.state());
+  }
+  followWorld(snapshot: WorldSyncSnapshot) {
+    this.worldClock.receive(snapshot);
+  }
+  releaseWorld() {
+    this.worldClock.reset();
   }
   controls(volume: number, reverb: number) {
     this.master?.gain.rampTo(volume * MUSIC.maxGain, 0.12);

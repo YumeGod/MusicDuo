@@ -13,4 +13,4 @@ export const MUSIC = {
   progressionBars: 4,
   keyGestureEnabled: false,
 };
-export const KEYS = ['F', 'C', 'G', 'D', 'A'];
+export const KEYS = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];

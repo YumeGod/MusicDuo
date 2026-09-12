@@ -1,12 +1,15 @@
 import * as Tone from 'tone';
-import type { SoundObject } from '../types';
+import type { HarmonyState, SoundObject } from '../types';
 import { MUSIC } from '../config/musicConfig';
-import { frequencyFromY } from './harmony';
+import { midiFrequency, pitchTargetFromY } from './harmony';
+import { SUBDIVISION_TICKS } from '../config/rhythmConfig';
 export class SoundObjectVoice {
   gain: Tone.Gain;
   synth: Tone.Synth | Tone.FMSynth | Tone.MembraneSynth | Tone.NoiseSynth;
   private free: Tone.Synth;
   private sustaining = false;
+  private targetMidi?: number;
+  private rhythm: SoundObject['subdivision'] = '4n';
   constructor(
     public instrumentId: SoundObject['instrumentId'],
     bus: Tone.Gain,
@@ -50,28 +53,36 @@ export class SoundObjectVoice {
       portamento: MUSIC.glideSeconds,
     }).connect(this.gain);
   }
-  update(o: SoundObject) {
+  update(o: SoundObject, harmony: HarmonyState, time?: number) {
     this.gain.gain.rampTo(o.muted ? 0 : o.volume * MUSIC.voiceGain, 0.1);
     if (o.mode === 'FREE_LONG_NOTE' && !o.muted) {
-      const frequency = frequencyFromY(o.pitchY, MUSIC.minMidi, MUSIC.maxMidi);
+      const target = pitchTargetFromY(
+        o.pitchY,
+        harmony.scaleNotes,
+        MUSIC.minMidi,
+        MUSIC.maxMidi,
+        this.targetMidi,
+      );
+      const frequency = midiFrequency(target);
       if (!this.sustaining) {
         this.synth.triggerRelease();
-        this.free.triggerAttack(frequency);
+        this.free.triggerAttack(frequency, time);
+        this.targetMidi = target;
         this.sustaining = true;
-      } else this.free.frequency.rampTo(frequency, MUSIC.glideSeconds);
+      } else if (target !== this.targetMidi) {
+        this.free.frequency.rampTo(frequency, MUSIC.glideSeconds, time);
+        this.targetMidi = target;
+      }
     } else if (this.sustaining) {
       this.free.triggerRelease();
       this.sustaining = false;
+      this.targetMidi = undefined;
     }
   }
   play(o: SoundObject, notes: string[], step: number, time: number) {
     if (o.muted || o.mode === 'FREE_LONG_NOTE') return;
-    const rhythm =
-      this.instrumentId === 'pattern'
-        ? 1
-        : this.instrumentId === 'bass'
-          ? 4
-          : 2;
+    if (step % 16 === 0) this.rhythm = o.subdivision;
+    const rhythm = SUBDIVISION_TICKS[this.rhythm];
     if (step % rhythm !== 0) return;
     const note = Tone.Frequency(
       notes[
@@ -86,7 +97,7 @@ export class SoundObjectVoice {
     else
       this.synth.triggerAttackRelease(
         note,
-        Math.min(o.sustain, Tone.Time('4n').toSeconds() * 0.85),
+        Math.min(o.sustain, Tone.Time(this.rhythm).toSeconds() * 0.85),
         time,
         0.6,
       );

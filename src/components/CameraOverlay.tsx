@@ -1,4 +1,5 @@
 import type { HandControlState, SoundObject } from '../types';
+import { RHYTHM_LABELS } from '../config/rhythmConfig';
 import { INSTRUMENTS } from '../config/objectSoundMap';
 const CONNECTIONS = [
   [0, 1, 2, 3, 4],
@@ -91,11 +92,7 @@ export function CameraOverlay({
         >
           <span className="object-tag">
             {o.label}
-            <span>
-              {o.id === selectedId
-                ? '↗ LINKED'
-                : `${Math.round(o.confidence * 100)}%`}
-            </span>
+            <span>{o.id === selectedId ? '↗ LINKED' : ''}</span>
           </span>
           {practice && (
             <span className="object-tone">
@@ -105,8 +102,8 @@ export function CameraOverlay({
           )}
           <span className="object-instrument">
             {o.id === selectedId && o.mode === 'FREE_LONG_NOTE'
-              ? 'FREE PITCH'
-              : INSTRUMENTS[o.instrumentId].name}
+              ? `MELODY · ${RHYTHM_LABELS[o.subdivision]}`
+              : `${INSTRUMENTS[o.instrumentId].name} · ${RHYTHM_LABELS[o.subdivision]}`}
           </span>
         </button>
       ))}

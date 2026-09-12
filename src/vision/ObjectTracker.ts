@@ -1,9 +1,12 @@
 import type { Detection, SoundObject } from '../types';
 import { VISION } from '../config/gestureConfig';
+import { ObjectRhythmStabilizer } from './ObjectRhythm';
+import { clamp } from '../gestures/smoothing';
 import { instrumentFor } from '../config/objectSoundMap';
 export class ObjectTracker {
   objects: SoundObject[] = [];
   private counter = 0;
+  private rhythms = new Map<string, ObjectRhythmStabilizer>();
   update(detections: Detection[], now: number) {
     const used = new Set<string>();
     for (const d of detections.filter(
@@ -29,6 +32,24 @@ export class ObjectTracker {
       }
       if (object) {
         used.add(object.id);
+        const elapsed = Math.max(0.1, (now - object.lastSeen) / 1000);
+        const motion = clamp(
+          (Math.hypot(d.bbox.x - object.bbox.x, d.bbox.y - object.bbox.y) /
+            elapsed) *
+            4,
+        );
+        object.appearance = {
+          size: d.bbox.width * d.bbox.height,
+          aspectRatio: d.bbox.width / Math.max(0.01, d.bbox.height),
+          complexity: d.edgeDensity ?? 0.3,
+          motion,
+          confidence: d.confidence,
+        };
+        if (!this.rhythms.has(object.id))
+          this.rhythms.set(object.id, new ObjectRhythmStabilizer());
+        object.subdivision = this.rhythms
+          .get(object.id)!
+          .update(object.appearance, object.label, object.subdivision, now);
         object.bbox = d.bbox;
         object.confidence = d.confidence;
         object.lastSeen = now;
@@ -38,6 +59,8 @@ export class ObjectTracker {
     this.objects = this.objects.filter(
       (o) => now - o.lastSeen < VISION.objectTimeoutMs,
     );
+    for (const id of this.rhythms.keys())
+      if (!this.objects.some((o) => o.id === id)) this.rhythms.delete(id);
     return this.stable();
   }
   create(d: Detection, now: number): SoundObject {
@@ -55,6 +78,7 @@ export class ObjectTracker {
       lastSeen: now,
       observations: 0,
       muted: false,
+      subdivision: '4n',
     };
   }
   stable() {
@@ -64,5 +88,6 @@ export class ObjectTracker {
   }
   reset() {
     this.objects = [];
+    this.rhythms.clear();
   }
 }

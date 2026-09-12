@@ -4,6 +4,8 @@ import type {
   HarmonyState,
   RoleOverride,
   SoundObject,
+  SceneMoodState,
+  WorldSyncSnapshot,
 } from '../types';
 import type { MusicEngine } from '../audio/MusicEngine';
 import type { HandTrackingEngine } from '../vision/HandTrackingEngine';
@@ -16,6 +18,14 @@ import { GameModeManager } from '../interaction/GameModeManager';
 import { GlobalMusicController } from '../audio/GlobalMusicController';
 import { MultiplayerSyncManager } from '../multiplayer/MultiplayerSyncManager';
 import { VISION } from '../config/gestureConfig';
+import { SceneAnalysisEngine } from '../vision/SceneAnalysisEngine';
+import { SceneMoodStabilizer } from '../vision/sceneMood';
+import { SCENE, DEFAULT_MOOD } from '../config/sceneConfig';
+import {
+  CALIBRATION,
+  type CalibrationState,
+  type CalibrationSide,
+} from '../gestures/ExpansionCalibration';
 import { ChordProgressionEngine } from '../audio/ChordProgressionEngine';
 export interface Snapshot {
   running: boolean;
@@ -34,6 +44,10 @@ export interface Snapshot {
   fps: number;
   network: string;
   objectHand?: HandControlState;
+  sceneMood: SceneMoodState;
+  sceneLocked: boolean;
+  sceneAuthority: boolean;
+  calibration: CalibrationState;
 }
 export class PerformanceController {
   music?: MusicEngine;
@@ -56,6 +70,11 @@ export class PerformanceController {
   private handEngine?: HandTrackingEngine;
   private objectEngine?: ObjectRecognitionEngine;
   private interpreter = new GestureInterpreter();
+  scene = new SceneMoodStabilizer();
+  private sceneAnalysis = new SceneAnalysisEngine();
+  private lastScene = 0;
+  private remoteWorld?: WorldSyncSnapshot;
+  private lastWorld?: WorldSyncSnapshot;
   private frame = 0;
   private generation = 0;
   private lastVideo = -1;
@@ -71,7 +90,20 @@ export class PerformanceController {
   constructor(
     private video: HTMLVideoElement,
     private publish: (s: Snapshot) => void,
-  ) {}
+  ) {
+    this.network.priority = () =>
+      this.override === 'GLOBAL_CONTROLLER'
+        ? 0
+        : this.override === 'OBJECT_CONTROLLER'
+          ? 2
+          : 1;
+    try {
+      const saved = localStorage.getItem(CALIBRATION.storageKey);
+      if (saved) this.interpreter.calibration.restore(saved);
+    } catch {
+      /* Storage optional. */
+    }
+  }
   objects() {
     return this.tracker.stable();
   }
@@ -95,6 +127,12 @@ export class PerformanceController {
       reverb: this.global.reverb,
       fps: this.fps,
       network: this.networkStatus,
+      sceneMood: this.network.isAuthority()
+        ? (this.scene.smoothed ?? DEFAULT_MOOD)
+        : this.harmony.sceneMood,
+      sceneLocked: this.scene.manualLock,
+      sceneAuthority: this.network.isAuthority(),
+      calibration: { ...this.interpreter.calibration.state },
       objectHand:
         this.hands.find(
           (h) =>
@@ -118,11 +156,21 @@ export class PerformanceController {
       if (generation !== this.generation) return;
       const music = new MusicEngine();
       this.music = music;
+      if (this.lastWorld) music.harmony.follow(this.lastWorld, 0);
       music.harmony.key = this.harmony.key;
       music.harmony.bpm = this.harmony.bpm;
-      await music.start((h) => {
-        this.harmony = h;
-      });
+      if (this.scene.locked) music.harmony.requestWorld(this.scene.locked);
+      if (this.remoteWorld && !this.network.isAuthority())
+        music.followWorld(this.remoteWorld);
+      await music.start(
+        (h) => {
+          this.harmony = h;
+        },
+        (snapshot) => {
+          this.lastWorld = snapshot;
+          this.network.sendWorld(snapshot);
+        },
+      );
       if (generation !== this.generation) {
         music.dispose();
         return;
@@ -247,11 +295,30 @@ export class PerformanceController {
           );
           if (hand) this.hands.push(hand);
         }
+        if (now - this.lastScene >= SCENE.sampleMs) {
+          this.lastScene = now;
+          const mood = this.sceneAnalysis.sample(this.video, this.objects());
+          if (mood && this.network.isAuthority()) {
+            const world = this.scene.update(mood, now);
+            if (world) {
+              this.music?.harmony.requestWorld(world);
+              this.status = `Scene interpreted · ${world.key} ${world.scale.replaceAll('_', ' ')} queued for the next phrase.`;
+            }
+          }
+        }
         if (now - this.lastObject > VISION.detectIntervalMs) {
           this.lastObject = now;
           if (this.objectEngine)
             this.tracker.update(
-              this.objectEngine.detect(this.video, now, this.mirror),
+              this.objectEngine
+                .detect(this.video, now, this.mirror)
+                .map((d) => ({
+                  ...d,
+                  edgeDensity: this.sceneAnalysis.edgeDensity(
+                    d.bbox,
+                    this.mirror,
+                  ),
+                })),
               now,
             );
         }
@@ -266,7 +333,7 @@ export class PerformanceController {
       }
     }
     if (!this.practice && now - this.lastHand > 600) this.hands = [];
-    if (!this.practice) {
+    if (!this.practice && this.interpreter.calibration.state.step === 'idle') {
       const controls = new Map<string, HandControlState>();
       for (const hand of this.hands) {
         const role = GameModeManager.role(hand, this.mode, this.override);
@@ -290,14 +357,19 @@ export class PerformanceController {
       const global = controls.get('GLOBAL_CONTROLLER');
       if (global) {
         const key = this.global.update(global, now);
-        if (key) this.music?.harmony.requestKey(key);
+        if (key && this.network.isAuthority())
+          this.music?.harmony.requestKey(key);
       }
       this.selection.update(
         controls.get('OBJECT_CONTROLLER'),
         this.objects(),
         now,
       );
-    } else if (this.remote && now - this.remote.time < 800) {
+    } else if (
+      this.interpreter.calibration.state.step === 'idle' &&
+      this.remote &&
+      now - this.remote.time < 800
+    ) {
       if (this.remote.role === 'GLOBAL_CONTROLLER')
         this.global.update(this.remote.hand, now);
       else this.selection.update(this.remote.hand, this.objects(), now);
@@ -368,25 +440,76 @@ export class PerformanceController {
     this.emit();
   }
   key(key: string) {
+    if (!this.network.isAuthority()) return;
     if (this.running) {
       this.music?.harmony.requestKey(key);
-      this.status = `${key} major queued for the next bar.`;
+      this.status = `${key} ${this.harmony.mode} queued for the next bar.`;
     } else {
       this.harmony = { ...this.harmony, key };
     }
     this.emit();
   }
   bpm(bpm: number) {
+    if (!this.network.isAuthority()) return;
     this.music?.bpm(bpm);
     this.harmony = { ...this.harmony, bpm };
     this.emit();
   }
   regenerate() {
+    if (!this.network.isAuthority()) return;
     this.music?.harmony.requestRegenerate();
     this.status = 'New progression queued for the next four-bar phrase.';
     this.emit();
   }
+  calibrate(side: CalibrationSide) {
+    this.selection.detach(this.objects(), performance.now());
+    this.interpreter.calibration.begin(side);
+    this.emit();
+  }
+  captureCalibration() {
+    if (this.interpreter.calibration.capture(performance.now())) {
+      this.interpreter.resetExpansionFilters();
+      try {
+        localStorage.setItem(
+          CALIBRATION.storageKey,
+          this.interpreter.calibration.serialize(),
+        );
+      } catch {
+        /* Storage optional. */
+      }
+    }
+    this.emit();
+  }
+  cancelCalibration() {
+    this.interpreter.calibration.cancel();
+    this.emit();
+  }
+  resetCalibration() {
+    this.interpreter.calibration.reset();
+    this.interpreter.resetExpansionFilters();
+    try {
+      localStorage.removeItem(CALIBRATION.storageKey);
+    } catch {
+      /* Storage optional. */
+    }
+    this.emit();
+  }
+  reanalyze() {
+    if (!this.network.isAuthority()) return;
+    this.scene.reanalyze();
+    this.status = this.practice
+      ? 'Scene analysis uses a live camera. The current world is kept in practice mode.'
+      : 'Reinterpreting the scene. Hold the view steady for a few seconds.';
+    this.emit();
+  }
+  lockScene(lock: boolean) {
+    this.scene.manualLock = lock;
+    this.emit();
+  }
   connect(room: string) {
+    this.music?.releaseWorld();
+    this.remoteWorld = undefined;
+    this.remote = undefined;
     this.network.connect(
       room,
       (m) => {
@@ -414,10 +537,33 @@ export class PerformanceController {
         this.networkStatus = s;
         this.emit();
       },
+      (snapshot) => {
+        this.remoteWorld = snapshot;
+        this.lastWorld = snapshot;
+        this.music?.followWorld(snapshot);
+        if (!this.music) {
+          const h = new ChordProgressionEngine();
+          this.harmony = h.follow(snapshot);
+        }
+        this.status = 'Following the shared musical world.';
+        this.emit();
+      },
+      (authority) => {
+        if (authority) {
+          this.music?.releaseWorld();
+          this.remoteWorld = undefined;
+          this.scene.reset();
+          this.status = 'This device now leads scene harmony.';
+        } else this.status = 'Following scene harmony from the room leader.';
+        this.emit();
+      },
     );
   }
   disconnect() {
     this.network.disconnect();
+    this.music?.releaseWorld();
+    this.remoteWorld = undefined;
+    this.scene.reset();
     this.remote = undefined;
     this.networkStatus = 'Solo session';
     this.emit();
@@ -439,6 +585,10 @@ export class PerformanceController {
     this.hands = [];
     this.selection.detach([], performance.now());
     this.lastVideo = -1;
+    this.lastScene = 0;
+    this.sceneAnalysis.reset();
+    this.scene.reset();
+    this.interpreter.calibration.cancel();
     this.cameraStatus = 'Camera off';
     this.status = 'Ready when you are.';
     this.emit();

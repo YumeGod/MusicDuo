@@ -1,4 +1,5 @@
 import type { Point } from '../types';
+import { normalizeExpansion } from './ExpansionCalibration';
 import { clamp } from './smoothing';
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 export function handGeometry(p: Point[]) {
@@ -15,7 +16,8 @@ export function handGeometry(p: Point[]) {
     cursorY: (p[4].y + p[8].y) / 2,
     y: clamp(1 - center.y),
     pinchDistance: clamp(distance(p[4], p[8]) / palm, 0, 1.5),
-    handExpansion: clamp((spread - 1.05) / 1.1),
+    rawExpansion: spread,
+    handExpansion: normalizeExpansion(spread),
     handAngle: (Math.atan2(p[9].x - p[0].x, p[0].y - p[9].y) * 180) / Math.PI,
   };
 }

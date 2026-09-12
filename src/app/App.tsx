@@ -37,6 +37,9 @@ import {
 } from '@/components/ui/dialog';
 import { PerformanceController, type Snapshot } from './PerformanceController';
 import { ChordProgressionEngine } from '../audio/ChordProgressionEngine';
+import { CalibrationPanel } from '../components/CalibrationPanel';
+import { DEFAULT_MOOD } from '../config/sceneConfig';
+import { RHYTHM_LABELS } from '../config/rhythmConfig';
 import { CameraOverlay } from '../components/CameraOverlay';
 import { AudioScope } from '../components/AudioScope';
 import { DebugPanel } from '../components/DebugPanel';
@@ -59,6 +62,15 @@ const initial: Snapshot = {
   reverb: MUSIC.reverb,
   fps: 0,
   network: 'Solo session',
+  sceneMood: DEFAULT_MOOD,
+  sceneLocked: false,
+  sceneAuthority: true,
+  calibration: {
+    step: 'idle',
+    side: 'left',
+    message: 'Optional · make a comfortable open hand reach 100%.',
+    calibrated: [],
+  },
 };
 export default function MusicDuo() {
   const video = useRef<HTMLVideoElement>(null),
@@ -71,7 +83,7 @@ export default function MusicDuo() {
     [override, setOverride] = useState<RoleOverride>('AUTO'),
     [keyGesture, setKeyGesture] = useState(false),
     [room, setRoom] = useState('studio-01'),
-    [guide, setGuide] = useState(true);
+    [guide, setGuide] = useState(false);
   useEffect(() => {
     if (!video.current) return;
     const c = new PerformanceController(video.current, setS);
@@ -87,7 +99,7 @@ export default function MusicDuo() {
     [],
   );
   const selected = s.objects.find((o) => o.id === s.selectedId);
-  const activeKey = KEYS.indexOf(s.harmony.key);
+  const activeKey = Math.max(0, KEYS.indexOf(s.harmony.key));
   const switchMode = (value: string) => {
     const m = value as GameMode;
     setMode(m);
@@ -137,8 +149,8 @@ export default function MusicDuo() {
                 </p>
                 <p>
                   <b>03 · Shape the music</b>Spread your fingers for longer
-                  notes. Open fully for free pitch, then move up and down. Close
-                  your hand to return to the chord.
+                  notes. Open fully for a sustained melody in the current scale,
+                  then move up and down. Close your hand to return to the chord.
                 </p>
                 <p>
                   <b>04 · Play together</b>Your right hand controls the whole
@@ -161,9 +173,10 @@ export default function MusicDuo() {
             <DialogContent className="duo-dialog">
               <DialogTitle>A shared room for two</DialogTitle>
               <DialogDescription>
-                The MVP connects tabs on this browser using a local room.
-                Two-device networking is available through the documented
-                WebSocket adapter.
+                The MVP connects tabs on this browser using a local room. One
+                device leads the scene; key, mode, chords, and mood follow that
+                shared world. Two-device networking uses the existing WebSocket
+                adapter.
               </DialogDescription>
               <label className="field">
                 Room name
@@ -211,8 +224,11 @@ export default function MusicDuo() {
               </button>
               <p className="muted">
                 {s.network}. Open this site in another tab and join the same
-                room with the other role. Start audio in each tab; mute one tab
-                to avoid doubling.
+                room with the other role. Start audio in each tab; use one
+                audible tab to avoid doubling.{' '}
+                {s.sceneAuthority
+                  ? 'This device leads harmony.'
+                  : 'Following the room’s harmony.'}
               </p>
             </DialogContent>
           </Dialog>
@@ -226,7 +242,7 @@ export default function MusicDuo() {
               THE PLAYGROUND
             </div>
             <h1>
-              Turn your space into sound<span>.</span>
+              Play your scene<span>.</span>
             </h1>
           </div>
           <div className="mode-picker">
@@ -426,6 +442,22 @@ export default function MusicDuo() {
                   </span>
                 </div>
               </div>
+              {s.running && (
+                <div
+                  className="musical-world"
+                  aria-label="Current musical world"
+                >
+                  <span>
+                    Key <b>{s.harmony.key}</b>
+                  </span>
+                  <span>
+                    Mode <b>{s.harmony.mode}</b>
+                  </span>
+                  <span>
+                    Chord <b>{s.harmony.chordName}</b>
+                  </span>
+                </div>
+              )}
               <div className="canvas-footer">
                 <span>
                   <span className={`tiny-dot ${s.running ? 'mint' : ''}`} />
@@ -435,13 +467,35 @@ export default function MusicDuo() {
                       : s.camera
                     : 'Ready to find your rhythm'}
                 </span>
-                <span className="mono">
-                  {s.objects.length.toString().padStart(2, '0')} OBJECTS{' '}
-                  <span className="separator">/</span> {s.fps} FPS
-                </span>
+                <div className="scene-actions">
+                  <button
+                    className="text-button"
+                    disabled={!s.running || s.practice || !s.sceneAuthority}
+                    onClick={() => controller.current?.reanalyze()}
+                  >
+                    <RefreshCw size={13} />
+                    Reanalyze scene
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!s.sceneAuthority}
+                    aria-pressed={s.sceneLocked}
+                    onClick={() =>
+                      controller.current?.lockScene(!s.sceneLocked)
+                    }
+                  >
+                    {s.sceneLocked ? 'Scene locked' : 'Lock scene'}
+                  </button>
+                </div>
               </div>
             </section>
-            <section className="harmony-panel">
+            <details className="harmony-panel">
+              <summary>
+                Chord progression{' '}
+                <span>
+                  {s.harmony.key} · {s.harmony.mode}
+                </span>
+              </summary>
               <div className="section-heading">
                 <h2>
                   <Music2 size={17} />
@@ -449,7 +503,7 @@ export default function MusicDuo() {
                 </h2>
                 <button
                   className="text-button"
-                  disabled={!s.running}
+                  disabled={!s.running || !s.sceneAuthority}
                   onClick={() => controller.current?.regenerate()}
                 >
                   <RefreshCw size={14} />
@@ -472,7 +526,15 @@ export default function MusicDuo() {
                     </div>
                     <strong>
                       {name}
-                      <span>{name.endsWith('m') ? 'min' : 'maj'}</span>
+                      <span>
+                        {name.endsWith('dim')
+                          ? 'dim'
+                          : name.endsWith('aug')
+                            ? 'aug'
+                            : name.endsWith('m')
+                              ? 'min'
+                              : 'maj'}
+                      </span>
                     </strong>
                     <div className="beat-track">
                       {[0, 1, 2, 3].map((b) => (
@@ -494,12 +556,12 @@ export default function MusicDuo() {
               <div className="harmony-footer">
                 <span>
                   <span className="tiny-dot mint" />
-                  {s.harmony.key} major <span className="separator">·</span>{' '}
-                  4-bar progression
+                  {s.harmony.key} {s.harmony.mode}{' '}
+                  <span className="separator">·</span> 4-bar progression
                 </span>
-                <span>Always in harmony. Until you let go.</span>
+                <span>Chords and melody share one musical world.</span>
               </div>
-            </section>
+            </details>
             {guide && (
               <section className="quick-guide">
                 <div className="guide-heading">
@@ -584,18 +646,18 @@ export default function MusicDuo() {
                       <button
                         aria-label="Previous key"
                         onClick={() => keyStep(-1)}
-                        disabled={!s.running}
+                        disabled={!s.running || !s.sceneAuthority}
                       >
                         <ChevronLeft size={16} />
                       </button>
                       <b>
                         {s.harmony.key}
-                        <span>major</span>
+                        <span>{s.harmony.quality}</span>
                       </b>
                       <button
                         aria-label="Next key"
                         onClick={() => keyStep(1)}
-                        disabled={!s.running}
+                        disabled={!s.running || !s.sceneAuthority}
                       >
                         <ChevronRight size={16} />
                       </button>
@@ -610,7 +672,7 @@ export default function MusicDuo() {
                         min={MUSIC.minBpm}
                         max={MUSIC.maxBpm}
                         value={s.harmony.bpm}
-                        disabled={!s.running}
+                        disabled={!s.running || !s.sceneAuthority}
                         onChange={(e) => {
                           const v = Number(e.target.value);
                           if (v >= MUSIC.minBpm && v <= MUSIC.maxBpm)
@@ -668,7 +730,10 @@ export default function MusicDuo() {
                         </span>
                         <span>
                           <b>{o.label}</b>
-                          <small>{INSTRUMENTS[o.instrumentId].name}</small>
+                          <small>
+                            {INSTRUMENTS[o.instrumentId].name} ·{' '}
+                            {RHYTHM_LABELS[o.subdivision]}
+                          </small>
                         </span>
                         {selected?.id === o.id && <Link2 size={14} />}
                       </button>
@@ -735,7 +800,7 @@ export default function MusicDuo() {
                     }
                   />
                   <Toggle
-                    label="Free pitch · sustained"
+                    label="Scale melody · sustained"
                     checked={selected.mode === 'FREE_LONG_NOTE'}
                     onChange={(v) =>
                       controller.current?.patch(selected.id, {
@@ -747,23 +812,18 @@ export default function MusicDuo() {
                     className={`pitch-badge ${selected.mode === 'FREE_LONG_NOTE' ? 'free' : ''}`}
                   >
                     {selected.mode === 'FREE_LONG_NOTE'
-                      ? 'FREE PITCH ↕ Move vertically'
+                      ? `SCALE MELODY · ${s.harmony.mode} ↕`
                       : 'CHORD · Following the harmony'}
                   </span>
                 </div>
               )}
             </section>
-            <section className="control-panel session-panel">
-              <div className="section-heading">
-                <h2>
-                  <Settings2 size={16} />
-                  Your setup
-                </h2>
-                <span className="local-label">
-                  <span className="tiny-dot mint" />
-                  LOCAL
-                </span>
-              </div>
+            <details className="control-panel session-panel">
+              <summary>
+                <Settings2 size={16} />
+                Your setup
+              </summary>
+
               <div className="control-inner">
                 <Toggle
                   label="Mirror camera"
@@ -816,7 +876,23 @@ export default function MusicDuo() {
                   }}
                 />
               </div>
-            </section>
+              <div className="calibration-container">
+                <CalibrationPanel
+                  state={s.calibration}
+                  hands={s.hands}
+                  enabled={
+                    s.running &&
+                    !s.practice &&
+                    !s.loading &&
+                    s.camera === 'Camera live'
+                  }
+                  onBegin={(side) => controller.current?.calibrate(side)}
+                  onCapture={() => controller.current?.captureCalibration()}
+                  onCancel={() => controller.current?.cancelCalibration()}
+                  onReset={() => controller.current?.resetCalibration()}
+                />
+              </div>
+            </details>
           </aside>
         </div>
         <footer className="workspace-footer">

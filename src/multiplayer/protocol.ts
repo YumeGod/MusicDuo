@@ -40,3 +40,93 @@ export function validMessage(v: unknown): v is NetworkControlMessage {
     return false;
   return true;
 }
+
+import type { WorldSyncSnapshot } from '../types';
+import { KEY_OFFSETS, SCALES } from '../audio/harmony';
+import { PROGRESSIONS } from '../config/sceneConfig';
+export interface PresenceMessage {
+  version: 1;
+  kind: 'presence';
+  playerId: string;
+  sessionId: string;
+  timestamp: number;
+  priority: number;
+}
+export interface WorldMessage {
+  version: 1;
+  kind: 'world';
+  playerId: string;
+  sessionId: string;
+  timestamp: number;
+  snapshot: WorldSyncSnapshot;
+}
+export function validWorldSnapshot(v: unknown): v is WorldSyncSnapshot {
+  if (!v || typeof v !== 'object') return false;
+  const s = v as WorldSyncSnapshot,
+    w = s.world;
+  if (
+    !w ||
+    typeof w !== 'object' ||
+    !Object.hasOwn(KEY_OFFSETS, w.key) ||
+    !Object.hasOwn(SCALES, w.scale) ||
+    !Object.hasOwn(PROGRESSIONS, w.character) ||
+    !['major', 'minor', 'modal'].includes(w.quality) ||
+    !w.mood
+  )
+    return false;
+  if (
+    ![
+      'valence',
+      'energy',
+      'tension',
+      'brightness',
+      'complexity',
+      'confidence',
+    ].every((k) => {
+      const n = w.mood[k as keyof typeof w.mood];
+      return Number.isFinite(n) && n >= 0 && n <= 1;
+    })
+  )
+    return false;
+  return (
+    typeof s.epochId === 'string' &&
+    s.epochId.length > 0 &&
+    s.epochId.length <= 100 &&
+    Array.isArray(s.sequence) &&
+    s.sequence.length === 4 &&
+    s.sequence.every((n) => Number.isInteger(n) && n >= 0 && n < 7) &&
+    Number.isFinite(s.bpm) &&
+    s.bpm >= 50 &&
+    s.bpm <= 160 &&
+    Number.isSafeInteger(s.tick) &&
+    s.tick >= 0 &&
+    Number.isFinite(s.effectiveAt)
+  );
+}
+export function validEnvelope(
+  v: unknown,
+): v is PresenceMessage | WorldMessage | NetworkControlMessage {
+  if (!v || typeof v !== 'object') return false;
+  const m = v as unknown as {
+    version: number;
+    playerId: string;
+    sessionId: string;
+    timestamp: number;
+    kind: string;
+    priority: number;
+    snapshot: unknown;
+  };
+  if (
+    m.version !== 1 ||
+    typeof m.playerId !== 'string' ||
+    m.playerId.length > 100 ||
+    typeof m.sessionId !== 'string' ||
+    m.sessionId.length > 100 ||
+    !Number.isFinite(m.timestamp)
+  )
+    return false;
+  if (m.kind === 'presence')
+    return Number.isInteger(m.priority) && m.priority >= 0 && m.priority <= 2;
+  if (m.kind === 'world') return validWorldSnapshot(m.snapshot);
+  return validMessage(v);
+}
