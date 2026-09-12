@@ -2,14 +2,66 @@
 
 A browser musical instrument: recognized objects become voices, shared harmony gives them a musical home, and your hands shape the performance.
 
-## Run
+## Quick Start
+
+### 1. Install and run
+
+You need **Node.js 22.13 or newer**, npm, and a modern browser with Web Audio and camera support. Headphones are recommended. The basic experience needs no backend, API key, or environment variables. An internet connection is needed to download the vision models on first use.
 
 ```sh
-npm install
+git clone https://github.com/YumeGod/MusicDuo.git
+cd MusicDuo
+npm ci
 npm run dev
 ```
 
-Open the printed localhost URL. `npm run build` produces a static site in `dist/client`; the basic experience requires no server. The scaffold uses React 19, TypeScript, and Vinext on Vite 8 with static export. Browser audio and vision are loaded only after starting; no server runtime is required by the exported app.
+Open the local URL printed in the terminal (normally `http://localhost:3000`).
+
+### 2. Make your first sound
+
+1. Click **Start Experience** and allow camera access. Wait for the hand and object models to load.
+2. Place a bottle, book, or plant in view. Keep it still until its sound label appears.
+3. Pinch your **left** thumb and index finger over the object to link it. Look for **LINKED** and the hand-to-object tether.
+4. Spread your thumb and index finger to adjust that object's volume. Open your hand for longer notes; open fully to play a sustained melody within the current scale.
+5. Move your left hand up or down to change pitch. Open your pinch away from the object for a moment to detach.
+6. Use your **right** hand to shape the whole mix: thumb/index spread controls volume, and hand openness controls reverb.
+
+The scene establishes the key and scale gradually. Keep the camera steady for a few seconds; accepted changes take effect at a musical phrase boundary.
+
+**No camera?** Choose **Try without a camera**, click a practice object, and use its controls. Enable **Scale melody · sustained** and move your pointer vertically to play pitch.
+
+**Can't reach full openness?** Open **Your setup → Calibrate hand openness**, capture a relaxed hand, then a comfortably open hand. Calibration is optional and saved on this device.
+
+### 3. Choose a play mode
+
+| Mode              | How to play                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop duo       | Front camera; left hand controls an object and right hand controls the mix. Use role overrides for two performers or swapped handedness.                |
+| Mobile shared     | Back camera; one hand controls objects and the on-screen sliders control global volume and reverb.                                                      |
+| Local multiplayer | Open two tabs in the same browser, choose **Play together**, join the same room, and assign Player A / Player B. Use one audible tab to avoid doubling. |
+
+Two-device multiplayer requires a WebSocket relay; it is not hosted or bundled. See [Multiplayer MVP](#multiplayer-mvp) for the existing adapter and synchronization protocol.
+
+### Useful commands
+
+| Command             | Purpose                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| `npm run dev`       | Start the development server.                              |
+| `npm test`          | Run the automated tests.                                   |
+| `npm run typecheck` | Check TypeScript.                                          |
+| `npm run lint`      | Lint application code and tests.                           |
+| `npm run build`     | Build the static app into `dist/client`.                   |
+| `npm start`         | Preview the production build locally; run the build first. |
+
+The app uses React, TypeScript, Tone.js, MediaPipe, and Vinext on Vite. Deploy `dist/client` to an HTTPS static host; the exported app does not need a server runtime. Camera access requires **HTTPS or localhost**. Opening an ordinary HTTP LAN address on a phone will not enable camera access.
+
+### Troubleshooting
+
+- **No sound:** click Start Experience, check browser/system volume, and make sure an object has appeared. In practice mode, the example objects supply the voices.
+- **Camera unavailable:** allow camera permission, close other apps using the camera, and use HTTPS or localhost. Practice mode is available without a camera.
+- **Models fail to load:** check your internet connection and access to Google Storage and jsDelivr, then stop and restart the experience.
+- **Hands control the wrong role:** use **Your setup → Hand roles** to swap roles or assign Player A / B. Stop the experience before changing camera mode or mirroring.
+- **Scene harmony changes slowly:** this is intentional. Use **Reanalyze scene** for a new stable reading, or **Lock scene** to keep the current world.
 
 ## Play
 
