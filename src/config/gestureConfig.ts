@@ -1,0 +1,26 @@
+export const GESTURE = {
+  selectThreshold: 0.24,
+  releaseThreshold: 0.58,
+  selectDwellMs: 180,
+  releaseDwellMs: 650,
+  freeEnter: 0.82,
+  freeExit: 0.65,
+  smoothing: { position: 0.24, pinch: 0.2, expansion: 0.16, angle: 0.12 },
+  deadZone: 0.006,
+  nearMargin: 0.045,
+  lostHandMs: 1200,
+  minConfidence: 0.6,
+  keyDwellMs: 1400,
+  keyHysteresisDegrees: 8,
+};
+export const VISION = {
+  objectTimeoutMs: 4500,
+  objectConfidence: 0.55,
+  stableObservations: 2,
+  maxObjects: 7,
+  detectIntervalMs: 450,
+  handIntervalMs: 50,
+  cameraWidth: 960,
+  cameraHeight: 720,
+  matchDistance: 0.24,
+};
