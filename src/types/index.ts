@@ -44,6 +44,8 @@ export interface Detection {
   bbox: BoundingBox;
 }
 export interface HandControlState {
+  handId?: string;
+  controlLabel?: string;
   handedness: 'left' | 'right';
   x: number;
   y: number;
@@ -51,6 +53,7 @@ export interface HandControlState {
   pinchDistance: number;
   handExpansion: number;
   rawExpansion?: number;
+  fistStrength?: number;
   handAngle: number;
   isSelecting: boolean;
   confidence: number;
@@ -78,7 +81,7 @@ export type RoleOverride = 'AUTO' | 'SWAP' | Role;
 export type ObjectInteractionState =
   | 'IDLE'
   | 'HOVERING'
-  | 'PINCHING'
+  | 'GRABBING'
   | 'SELECTED'
   | 'FREE_PITCH'
   | 'RELEASING';
@@ -134,4 +137,11 @@ export interface WorldSyncSnapshot {
   bpm: number;
   tick: number;
   effectiveAt: number;
+}
+
+export interface HandObjectLink {
+  objectId: string;
+  handId: string;
+  label: string;
+  hand?: HandControlState;
 }

@@ -20,6 +20,11 @@ export function validMessage(v: unknown): v is NetworkControlMessage {
     typeof m.controls !== 'object'
   )
     return false;
+  if (
+    m.controls.handId !== undefined &&
+    (typeof m.controls.handId !== 'string' || m.controls.handId.length > 80)
+  )
+    return false;
   for (const key of ['x', 'y', 'cursorY', 'handExpansion'] as const) {
     const n = m.controls[key];
     if (n !== undefined && (!Number.isFinite(n) || n < 0 || n > 1))

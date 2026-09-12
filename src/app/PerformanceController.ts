@@ -1,5 +1,6 @@
 import type {
   GameMode,
+  HandObjectLink,
   HandControlState,
   HarmonyState,
   RoleOverride,
@@ -13,7 +14,8 @@ import type { ObjectRecognitionEngine } from '../vision/ObjectRecognitionEngine'
 import { CameraManager } from '../vision/CameraManager';
 import { ObjectTracker } from '../vision/ObjectTracker';
 import { GestureInterpreter } from '../gestures/GestureInterpreter';
-import { ObjectSelectionManager } from '../interaction/ObjectSelectionManager';
+import { MultiHandSelectionManager } from '../interaction/MultiHandSelectionManager';
+import { HandIdentityTracker } from '../vision/HandIdentityTracker';
 import { GameModeManager } from '../interaction/GameModeManager';
 import { GlobalMusicController } from '../audio/GlobalMusicController';
 import { MultiplayerSyncManager } from '../multiplayer/MultiplayerSyncManager';
@@ -44,6 +46,7 @@ export interface Snapshot {
   fps: number;
   network: string;
   objectHand?: HandControlState;
+  links: HandObjectLink[];
   sceneMood: SceneMoodState;
   sceneLocked: boolean;
   sceneAuthority: boolean;
@@ -53,7 +56,11 @@ export class PerformanceController {
   music?: MusicEngine;
   camera = new CameraManager();
   tracker = new ObjectTracker();
-  selection = new ObjectSelectionManager();
+  selections = new MultiHandSelectionManager();
+  private identities = new HandIdentityTracker();
+  get selection() {
+    return this.selections.focused;
+  }
   global = new GlobalMusicController();
   network = new MultiplayerSyncManager();
   mode: GameMode = 'DESKTOP_DUO';
@@ -82,11 +89,14 @@ export class PerformanceController {
   private lastObject = 0;
   private lastUI = 0;
   private fps = 0;
-  private remote?: {
-    hand: HandControlState;
-    role: 'GLOBAL_CONTROLLER' | 'OBJECT_CONTROLLER';
-    time: number;
-  };
+  private remotes = new Map<
+    string,
+    {
+      hand: HandControlState;
+      role: 'GLOBAL_CONTROLLER' | 'OBJECT_CONTROLLER';
+      time: number;
+    }
+  >();
   constructor(
     private video: HTMLVideoElement,
     private publish: (s: Snapshot) => void,
@@ -104,6 +114,9 @@ export class PerformanceController {
       /* Storage optional. */
     }
   }
+  private allHands() {
+    return [...this.hands, ...[...this.remotes.values()].map((r) => r.hand)];
+  }
   objects() {
     return this.tracker.stable();
   }
@@ -120,8 +133,8 @@ export class PerformanceController {
       selectedId: this.selection.selectedId,
       interaction: this.selection.machine.state,
       notice:
-        performance.now() - this.selection.noticeAt < 1800
-          ? this.selection.notice
+        performance.now() - this.selections.noticeAt < 1800
+          ? this.selections.notice
           : '',
       volume: this.global.volume,
       reverb: this.global.reverb,
@@ -133,15 +146,13 @@ export class PerformanceController {
       sceneLocked: this.scene.manualLock,
       sceneAuthority: this.network.isAuthority(),
       calibration: { ...this.interpreter.calibration.state },
-      objectHand:
-        this.hands.find(
-          (h) =>
-            GameModeManager.role(h, this.mode, this.override) ===
-            'OBJECT_CONTROLLER',
-        ) ??
-        (this.remote?.role === 'OBJECT_CONTROLLER'
-          ? this.remote.hand
-          : undefined),
+      links: this.selections.links(this.objects(), this.allHands()),
+      objectHand: this.allHands().find(
+        (h) =>
+          h.handId ===
+          this.objects().find((o) => o.id === this.selection.selectedId)
+            ?.selectedBy,
+      ),
     });
   }
   async start(practice = false) {
@@ -228,7 +239,7 @@ export class PerformanceController {
         else objects.dispose();
         this.cameraStatus = 'Camera live';
         this.status = results.every((r) => r.status === 'fulfilled')
-          ? 'Show an object. Pinch to make it yours.'
+          ? 'Show an object. Make a fist over it to link.'
           : `Vision partially unavailable (${results[0].status === 'rejected' ? 'hands ' : ''}${results[1].status === 'rejected' ? 'objects' : ''}). Check your connection or use practice mode.`;
       }
       this.loading = false;
@@ -246,6 +257,8 @@ export class PerformanceController {
     }
   }
   seedPractice() {
+    this.selections.reset(this.objects(), performance.now());
+    this.identities.reset();
     this.tracker.reset();
     const now = performance.now();
     this.tracker.objects = [
@@ -278,22 +291,26 @@ export class PerformanceController {
       try {
         const result = this.handEngine?.detect(this.video, now);
         this.hands = [];
-        for (let i = 0; i < (result?.landmarks.length ?? 0); i++) {
-          const category = result!.handedness[i][0];
-          const points = result!.landmarks[i].map((p) => ({
+        const observed = (result?.landmarks ?? []).map((landmarks, i) => ({
+          landmarks: landmarks.map((p) => ({
             ...p,
             x: this.mirror ? 1 - p.x : p.x,
-          }));
-          // MediaPipe handedness assumes mirrored input; inference uses the unmirrored video.
-          const handedness =
-            category.categoryName === 'Left' ? 'right' : 'left';
+          })),
+          handedness: (result!.handedness[i][0].categoryName === 'Left'
+            ? 'right'
+            : 'left') as 'left' | 'right',
+          confidence: result!.handedness[i][0].score,
+        }));
+        for (const tracked of this.identities.update(observed, now)) {
           const hand = this.interpreter.interpret(
-            points,
-            handedness,
-            category.score,
+            tracked.landmarks,
+            tracked.handedness,
+            tracked.confidence,
             now,
+            tracked.handId,
           );
-          if (hand) this.hands.push(hand);
+          if (hand)
+            this.hands.push({ ...hand, controlLabel: tracked.controlLabel });
         }
         if (now - this.lastScene >= SCENE.sampleMs) {
           this.lastScene = now;
@@ -333,16 +350,40 @@ export class PerformanceController {
       }
     }
     if (!this.practice && now - this.lastHand > 600) this.hands = [];
-    if (!this.practice && this.interpreter.calibration.state.step === 'idle') {
-      const controls = new Map<string, HandControlState>();
-      for (const hand of this.hands) {
-        const role = GameModeManager.role(hand, this.mode, this.override);
-        if (!controls.has(role)) controls.set(role, hand);
-      }
-      for (const [role, hand] of controls)
+    for (const [id, remote] of this.remotes)
+      if (now - remote.time >= 800) this.remotes.delete(id);
+    if (this.interpreter.calibration.state.step === 'idle') {
+      const local = this.practice ? [] : this.hands;
+      const eligible = local.filter(
+        () =>
+          this.mode === 'MOBILE_SHARED' ||
+          this.override !== 'GLOBAL_CONTROLLER',
+      );
+      const remoteObjects = [...this.remotes.values()]
+        .filter(
+          (r) =>
+            r.role === 'OBJECT_CONTROLLER' || this.selections.isLinked(r.hand),
+        )
+        .map((r) => r.hand);
+      this.selections.update(
+        [...eligible, ...remoteObjects],
+        this.objects(),
+        now,
+      );
+      let global: HandControlState | undefined;
+      for (const hand of local) {
+        const role =
+          this.selections.isLinked(hand) ||
+          (eligible.includes(hand) && hand.isSelecting)
+            ? 'OBJECT_CONTROLLER'
+            : GameModeManager.role(hand, this.mode, this.override);
+        if (role === 'GLOBAL_CONTROLLER' && !hand.isSelecting && !global)
+          global = hand;
         this.network.send({
-          role: role as 'GLOBAL_CONTROLLER' | 'OBJECT_CONTROLLER',
+          role,
           controls: {
+            handId: hand.handId,
+            handedness: hand.handedness,
             x: hand.x,
             y: hand.y,
             cursorY: hand.cursorY,
@@ -352,27 +393,19 @@ export class PerformanceController {
             isSelecting: hand.isSelecting,
           },
         });
-      if (this.remote && now - this.remote.time < 800)
-        controls.set(this.remote.role, this.remote.hand);
-      const global = controls.get('GLOBAL_CONTROLLER');
+      }
+      const remoteGlobal = [...this.remotes.values()].find(
+        (r) =>
+          r.role === 'GLOBAL_CONTROLLER' &&
+          !r.hand.isSelecting &&
+          !this.selections.isLinked(r.hand),
+      );
+      global = remoteGlobal?.hand ?? global;
       if (global) {
         const key = this.global.update(global, now);
         if (key && this.network.isAuthority())
           this.music?.harmony.requestKey(key);
       }
-      this.selection.update(
-        controls.get('OBJECT_CONTROLLER'),
-        this.objects(),
-        now,
-      );
-    } else if (
-      this.interpreter.calibration.state.step === 'idle' &&
-      this.remote &&
-      now - this.remote.time < 800
-    ) {
-      if (this.remote.role === 'GLOBAL_CONTROLLER')
-        this.global.update(this.remote.hand, now);
-      else this.selection.update(this.remote.hand, this.objects(), now);
     }
     if (now - this.lastUI > 80) {
       this.lastUI = now;
@@ -384,12 +417,23 @@ export class PerformanceController {
   select(id: string) {
     const o = this.objects().find((o) => o.id === id);
     if (o) {
-      this.selection.select(o, this.objects(), performance.now());
+      this.selections.select(
+        o,
+        this.objects(),
+        this.practice
+          ? []
+          : this.hands.filter(
+              () =>
+                this.mode === 'MOBILE_SHARED' ||
+                this.override !== 'GLOBAL_CONTROLLER',
+            ),
+        performance.now(),
+      );
       this.emit();
     }
   }
   detach() {
-    this.selection.detach(this.objects(), performance.now());
+    this.selections.detach(this.objects(), performance.now());
     this.emit();
   }
   pointer(x: number, y: number) {
@@ -399,6 +443,7 @@ export class PerformanceController {
     this.hands = [
       {
         handedness: 'left',
+        handId: 'pointer',
         x,
         y: 1 - y,
         cursorY: y,
@@ -462,7 +507,7 @@ export class PerformanceController {
     this.emit();
   }
   calibrate(side: CalibrationSide) {
-    this.selection.detach(this.objects(), performance.now());
+    this.selections.reset(this.objects(), performance.now());
     this.interpreter.calibration.begin(side);
     this.emit();
   }
@@ -509,12 +554,13 @@ export class PerformanceController {
   connect(room: string) {
     this.music?.releaseWorld();
     this.remoteWorld = undefined;
-    this.remote = undefined;
+    this.remotes.clear();
     this.network.connect(
       room,
       (m) => {
         this.networkStatus = 'Partner connected · local room';
-        this.remote = {
+        const id = `remote:${m.playerId}:${m.controls.handId ?? m.role}`;
+        this.remotes.set(id, {
           role: m.role,
           time: performance.now(),
           hand: {
@@ -529,8 +575,10 @@ export class PerformanceController {
             confidence: 1,
             landmarks: [],
             ...m.controls,
+            handId: id,
+            controlLabel: `Partner ${m.controls.handId ?? m.role}`,
           },
-        };
+        });
       },
       undefined,
       (s) => {
@@ -564,7 +612,7 @@ export class PerformanceController {
     this.music?.releaseWorld();
     this.remoteWorld = undefined;
     this.scene.reset();
-    this.remote = undefined;
+    this.remotes.clear();
     this.networkStatus = 'Solo session';
     this.emit();
   }
@@ -581,9 +629,11 @@ export class PerformanceController {
     this.handEngine = undefined;
     this.objectEngine = undefined;
     this.video.srcObject = null;
+    this.selections.reset(this.objects(), performance.now());
+    this.identities.reset();
     this.tracker.reset();
     this.hands = [];
-    this.selection.detach([], performance.now());
+    this.remotes.clear();
     this.lastVideo = -1;
     this.lastScene = 0;
     this.sceneAnalysis.reset();

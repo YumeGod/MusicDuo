@@ -16,6 +16,7 @@ export function DebugPanel({ s }: { s: Snapshot }) {
             ? 'Yes'
             : 'No',
           Pinch: s.hands[0]?.pinchDistance.toFixed(2) ?? '—',
+          'Fist closure': s.hands[0]?.fistStrength?.toFixed(2) ?? '—',
           Expansion: s.hands[0]?.handExpansion.toFixed(2) ?? '—',
           Angle: s.hands[0]?.handAngle.toFixed(1) ?? '—',
           'Selected object': s.selectedId ?? 'None',

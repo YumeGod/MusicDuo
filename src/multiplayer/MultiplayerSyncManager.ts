@@ -60,7 +60,10 @@ export class MultiplayerSyncManager {
       )
         return;
       const kind = 'kind' in data ? data.kind : 'controls',
-        key = data.playerId + kind + ('role' in data ? data.role : '');
+        key =
+          data.playerId +
+          kind +
+          ('role' in data ? data.role + (data.controls.handId ?? '') : '');
       if (data.timestamp <= (this.timestamps.get(key) ?? 0)) return;
       this.timestamps.set(key, data.timestamp);
       if ('kind' in data && data.kind === 'presence') {
@@ -137,8 +140,9 @@ export class MultiplayerSyncManager {
     >,
   ) {
     const now = Date.now();
-    if (now - (this.lastSent.get(message.role) ?? 0) < 50) return;
-    this.lastSent.set(message.role, now);
+    const stream = message.controls.handId ?? message.role;
+    if (now - (this.lastSent.get(stream) ?? 0) < 50) return;
+    this.lastSent.set(stream, now);
     this.publish({
       ...message,
       version: 1,

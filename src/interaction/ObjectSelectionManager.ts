@@ -3,6 +3,7 @@ import { GESTURE } from '../config/gestureConfig';
 import { GestureStateMachine } from '../gestures/GestureStateMachine';
 import { Dwell, clamp } from '../gestures/smoothing';
 export class ObjectSelectionManager {
+  constructor(readonly ownerId = 'local') {}
   machine = new GestureStateMachine();
   selectedId?: string;
   hoveredId?: string;
@@ -23,7 +24,7 @@ export class ObjectSelectionManager {
   }
   detach(objects: SoundObject[], now: number) {
     const o = objects.find((o) => o.id === this.selectedId);
-    if (o) {
+    if (o && o.selectedBy === this.ownerId) {
       o.selectedBy = undefined;
       o.mode = 'CHORD_FOLLOWING';
     }
@@ -35,12 +36,13 @@ export class ObjectSelectionManager {
     this.noticeAt = now;
   }
   select(o: SoundObject, objects: SoundObject[], now: number) {
+    if (o.selectedBy && o.selectedBy !== this.ownerId) return;
     this.detach(objects, now);
     this.machine.transition('HOVERING');
-    this.machine.transition('PINCHING');
+    this.machine.transition('GRABBING');
     this.machine.transition('SELECTED');
     this.selectedId = o.id;
-    o.selectedBy = 'local';
+    o.selectedBy = this.ownerId;
     this.notice = 'LINKED';
     this.noticeAt = now;
   }
@@ -52,6 +54,11 @@ export class ObjectSelectionManager {
     const selected = objects.find((o) => o.id === this.selectedId);
     if (this.selectedId && !selected) this.detach(objects, now);
     if (!hand) {
+      if (!this.selectedId) {
+        this.selectDwell.reset();
+        this.machine.reset();
+      }
+
       if (now - this.lastHand > GESTURE.lostHandMs) {
         if (this.selectedId) this.detach(objects, now);
         else {
@@ -65,6 +72,7 @@ export class ObjectSelectionManager {
     this.lastHand = now;
     if (selected) {
       const away =
+        !hand.isSelecting &&
         !this.inside(hand, selected) &&
         hand.pinchDistance > GESTURE.releaseThreshold;
       if (away) {
@@ -96,7 +104,12 @@ export class ObjectSelectionManager {
       return;
     }
     const hovered = objects
-      .filter((o) => this.inside(hand, o))
+      .filter(
+        (o) =>
+          (!o.selectedBy || o.selectedBy === this.ownerId) &&
+          !GESTURE.gestureExcludedLabels.includes(o.label.toLowerCase()) &&
+          this.inside(hand, o),
+      )
       .sort(
         (a, b) => a.bbox.width * a.bbox.height - b.bbox.width * b.bbox.height,
       )[0];
@@ -111,7 +124,7 @@ export class ObjectSelectionManager {
     }
     if (this.machine.state === 'IDLE') this.machine.transition('HOVERING');
     if (hand.isSelecting) {
-      this.machine.transition('PINCHING');
+      this.machine.transition('GRABBING');
       if (this.selectDwell.update(true, now, GESTURE.selectDwellMs))
         this.select(hovered, objects, now);
     } else {

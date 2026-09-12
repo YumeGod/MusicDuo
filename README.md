@@ -21,9 +21,9 @@ Open the local URL printed in the terminal (normally `http://localhost:3000`).
 
 1. Click **Start Experience** and allow camera access. Wait for the hand and object models to load.
 2. Place a bottle, book, or plant in view. Keep it still until its sound label appears.
-3. Pinch your **left** thumb and index finger over the object to link it. Look for **LINKED** and the hand-to-object tether.
+3. Move your **either palm** over the object, make a fist, and hold briefly to link it. Look for **LINKED** and the hand-to-object tether.
 4. Spread your thumb and index finger to adjust that object's volume. Open your hand for longer notes; open fully to play a sustained melody within the current scale.
-5. Move your left hand up or down to change pitch. Open your pinch away from the object for a moment to detach.
+5. Move your linked hand up or down to change pitch. Open your pinch away from the object for a moment to detach.
 6. Use your **right** hand to shape the whole mix: thumb/index spread controls volume, and hand openness controls reverb.
 
 The scene establishes the key and scale gradually. Keep the camera steady for a few seconds; accepted changes take effect at a musical phrase boundary.
@@ -34,11 +34,11 @@ The scene establishes the key and scale gradually. Keep the camera steady for a 
 
 ### 3. Choose a play mode
 
-| Mode              | How to play                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Desktop duo       | Front camera; left hand controls an object and right hand controls the mix. Use role overrides for two performers or swapped handedness.                |
-| Mobile shared     | Back camera; one hand controls objects and the on-screen sliders control global volume and reverb.                                                      |
-| Local multiplayer | Open two tabs in the same browser, choose **Play together**, join the same room, and assign Player A / Player B. Use one audible tab to avoid doubling. |
+| Mode              | How to play                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop duo       | Front camera; left hand controls an object and right hand controls the mix. Use role overrides for two performers or swapped handedness.                       |
+| Mobile shared     | Back camera; one hand controls objects and the on-screen sliders control global volume and reverb.                                                             |
+| Local multiplayer | Open two tabs in the same browser, choose **Play together**, join the same room, and choose the appropriate hand roles. Use one audible tab to avoid doubling. |
 
 Two-device multiplayer requires a WebSocket relay; it is not hosted or bundled. See [Multiplayer MVP](#multiplayer-mvp) for the existing adapter and synchronization protocol.
 
@@ -60,19 +60,19 @@ The app uses React, TypeScript, Tone.js, MediaPipe, and Vinext on Vite. Deploy `
 - **No sound:** click Start Experience, check browser/system volume, and make sure an object has appeared. In practice mode, the example objects supply the voices.
 - **Camera unavailable:** allow camera permission, close other apps using the camera, and use HTTPS or localhost. Practice mode is available without a camera.
 - **Models fail to load:** check your internet connection and access to Google Storage and jsDelivr, then stop and restart the experience.
-- **Hands control the wrong role:** use **Your setup → Hand roles** to swap roles or assign Player A / B. Stop the experience before changing camera mode or mirroring.
+- **Hands control the wrong role:** use **Your setup → Hand roles** to swap roles or choose global-only or object-only controls. Stop the experience before changing camera mode or mirroring.
 - **Scene harmony changes slowly:** this is intentional. Use **Reanalyze scene** for a new stable reading, or **Lock scene** to keep the current world.
 
 ## Play
 
 - Click **Start Experience**, permit the camera, and wait for vision models to load. No microphone is requested.
 - Hold a bottle, book, plant, chair, or another recognizable object still for two observations. EfficientDet recognizes COCO classes; arbitrary custom objects need a replacement model.
-- Left hand: pinch over a box for 180 ms to link. Spread thumb/index to control that object's volume. Open the whole hand for longer notes; open fully for a sustained scale melody. Move vertically through C2–C6: targets settle on the nearest note in the active scale/mode with short portamento. Close the hand to return to harmony.
+- Either hand: hold a fist with your palm over a box for 180 ms to link. Spread thumb/index to control that object's volume. Open the whole hand for longer notes; open fully for a sustained scale melody. Move vertically through C2–C6: targets settle on the nearest note in the active scale/mode with short portamento. Close the hand to return to harmony.
 - Detach by opening the pinch away from the object for 650 ms. Tracking loss detaches after 1.2 seconds. Click/tap a box or object row as an accessible alternative; use its detach button when needed.
-- Right hand: thumb/index distance controls master dynamics; openness controls reverb. Optional rotation changes keys after a dwell, on the next bar.
+- Unlinked right hand (automatic roles): thumb/index distance controls master dynamics; openness controls reverb. Optional rotation changes keys after a dwell, on the next bar.
 - **Try without a camera** creates explicitly labeled practice objects. Click to link, move the pointer vertically, and use object sliders / Scale melody. Practice does not pretend to detect real objects.
 - In **Mobile shared**, the back camera is requested, every hand controls objects, and the master panel provides touch controls. Stop before changing camera mode or mirroring.
-- Use **Swap left and right** or Player A / B overrides if handedness is interpreted incorrectly. Skeletons are optional.
+- Use **Swap left and right** or global-only / object-only overrides if handedness is interpreted incorrectly. Skeletons are optional.
 
 Model files and WASM are downloaded from Google Storage / jsDelivr on first use. Camera images remain in this browser. HTTPS or localhost is required for camera access. Model download/network errors are surfaced; practice works without vision downloads (after the app and audio bundle load).
 
@@ -100,7 +100,7 @@ Open **Your setup → Calibrate hand openness** with the live camera running. Ch
 | HandTrackingEngine                   | MediaPipe Hand Landmarker, up to four hands                          |
 | GestureInterpreter / handGeometry    | Palm-relative geometry, confidence gating, EMA                       |
 | GestureStateMachine                  | Explicit allowed transitions                                         |
-| ObjectSelectionManager               | Hover, pinch dwell, link, release, mode hysteresis                   |
+| ObjectSelectionManager               | Hover, fist dwell, link, release, mode hysteresis                    |
 | ChordProgressionEngine               | Scale-derived triads, scene worlds, phrase regeneration, queued keys |
 | MusicEngine                          | Tone transport, shared routing, metering and lifecycle               |
 | SoundObjectVoice / InstrumentManager | Persistent voices, per-object gain, glide                            |
@@ -122,11 +122,11 @@ The palette includes warm sine, triangle pluck, sub bass, FM bell, membrane drum
 - `src/gestures/ExpansionCalibration.ts`: calibration sample requirements, fallback bounds, storage key.
 - `src/config/musicConfig.ts`: tempo limits/default, pitch range, glide, output/reverb gain, experimental key feature default.
 
-Pinch thresholds are ratios to wrist–middle-MCP palm length (0.24 select, 0.58 release), not raw image distances. Vertical pitch uses palm-center Y, while the selection cursor is the thumb/index midpoint. Mirroring is applied consistently to landmarks and object boxes. Hand identity across crossing performers is heuristic: the first hand for each assigned role wins.
+Selection uses a smoothed four-finger closure score (0.72 to enter a fist, 0.45 to exit), followed by a 180 ms hold. A thumb/index pinch alone does not select. People remain recognized sound objects but are excluded from gesture targeting; click/tap their box or row to link explicitly. Both the selection cursor and vertical pitch use the palm center. Pinch distance remains palm-normalized for volume and open-away release (0.58 threshold). Mirroring is applied consistently to landmarks and object boxes. Each hand has its own tracked identity, smoothing, object lock, and tether (R1, R2, L1, L2). Two right hands can select different objects simultaneously. A linked right hand controls its object instead of the master. Tracking uses palm proximity and velocity; complete occlusion or ambiguous crossings can still lose identity.
 
 ## Multiplayer MVP
 
-**Play together** joins a same-browser, same-origin local room via BroadcastChannel. Open another tab, enter the same room, assign Player A global and Player B object, then start each experience. High-level controls are transmitted at at most 20 messages/second per role. No images or landmark arrays are sent. Sliders transmit master controls when Player A is explicitly selected. Incoming messages are validated, stale/replayed controls are ignored, and remote object controls time out.
+**Play together** joins a same-browser, same-origin local room via BroadcastChannel. Open another tab, enter the same room, choose global-only and object-only roles as needed, then start each experience. High-level controls are transmitted at at most 20 messages/second per hand. No images or landmark arrays are sent. Sliders transmit master controls when global-only controls are explicitly selected. Incoming messages are validated, stale/replayed controls are ignored, and remote object controls time out.
 
 The local room is a control-sync mock, not sample-accurate two-device playback. Object IDs belong to each camera; remote object selection uses normalized cursor coordinates against the receiving scene. Clients now share tonic, scale/mode, progression degrees, BPM, and the accepted scene mood. A room leader is elected deterministically, preferring the explicit global role. Followers suppress their own scene/key/progression decisions. Quarter-beat world snapshots carry a transport epoch, sixteenth tick and scheduled wall time; followers recover bar/beat position, including late joins and leader restarts. Audio devices still have independent sample clocks, so phase alignment is approximate, not sample-accurate. Use one audible tab while testing.
 
@@ -184,3 +184,7 @@ Unit tests cover persistent tracking, same-class matching, noisy selection, free
 Inference uses throttled main-thread MediaPipe CPU calls for compatibility. Low-end phones may drop frames; a worker-based inference adapter is the next performance improvement. No recording, camera upload, person identity tracking, or production room server is included.
 
 API references: [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js), [MediaPipe Object Detector](https://ai.google.dev/edge/mediapipe/solutions/vision/object_detector/web_js), [Tone Transport](https://github.com/Tonejs/Tone.js/wiki/Transport), [Tone instruments](https://github.com/Tonejs/Tone.js/wiki/Instruments).
+
+### Two people, one camera
+
+Keep Hand roles on Automatic. Each player places a palm over a different object and holds a fist to grab it. Right hands work too. Each LINKED label and tether identifies its controlling hand. Spread thumb/index for individual dynamics, expand for sustain, and move vertically for pitch. Open the pinch away from the object to detach. A held object cannot be stolen by another hand. Global-only role overrides intentionally disable grabbing; mobile and object-only roles allow every hand to control objects.

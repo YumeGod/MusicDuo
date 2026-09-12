@@ -1,4 +1,4 @@
-import type { HandControlState, SoundObject } from '../types';
+import type { HandControlState, SoundObject, HandObjectLink } from '../types';
 import { RHYTHM_LABELS } from '../config/rhythmConfig';
 import { INSTRUMENTS } from '../config/objectSoundMap';
 const CONNECTIONS = [
@@ -12,22 +12,18 @@ const CONNECTIONS = [
 export function CameraOverlay({
   objects,
   hands,
-  selectedId,
+  links,
   skeleton,
   onSelect,
   practice,
-  objectHand,
 }: {
   objects: SoundObject[];
   hands: HandControlState[];
-  selectedId?: string;
+  links: HandObjectLink[];
   skeleton: boolean;
   onSelect: (id: string) => void;
   practice: boolean;
-  objectHand?: HandControlState;
 }) {
-  const selected = objects.find((o) => o.id === selectedId),
-    hand = objectHand ?? hands.find((h) => h.handedness === 'left') ?? hands[0];
   return (
     <div className="camera-overlay">
       <svg viewBox="0 0 1000 750" preserveAspectRatio="none" aria-hidden="true">
@@ -62,25 +58,39 @@ export function CameraOverlay({
               ))}
             </g>
           ))}
-        {selected && hand && (
-          <g className="tether">
-            <line
-              x1={hand.x * 1000}
-              y1={hand.cursorY * 750}
-              x2={(selected.bbox.x + selected.bbox.width / 2) * 1000}
-              y2={(selected.bbox.y + selected.bbox.height / 2) * 750}
-            />
-            <circle cx={hand.x * 1000} cy={hand.cursorY * 750} r="9" />
-          </g>
-        )}
+        {links.map((link) => {
+          const selected = objects.find((o) => o.id === link.objectId),
+            hand = link.hand;
+          return selected && hand ? (
+            <g className="tether" key={link.handId}>
+              <line
+                x1={hand.x * 1000}
+                y1={hand.cursorY * 750}
+                x2={(selected.bbox.x + selected.bbox.width / 2) * 1000}
+                y2={(selected.bbox.y + selected.bbox.height / 2) * 750}
+              />
+              <circle cx={hand.x * 1000} cy={hand.cursorY * 750} r="9" />
+              <text
+                x={hand.x * 1000 + 14}
+                y={hand.cursorY * 750 - 14}
+                fill="white"
+                stroke="none"
+                fontSize="16"
+              >
+                {link.label}
+              </text>
+            </g>
+          ) : null;
+        })}
       </svg>
       {objects.map((o) => (
         <button
           key={o.id}
           onClick={() => onSelect(o.id)}
-          className={`object-box ${o.id === selectedId ? 'linked' : ''} ${practice ? 'practice-object' : ''}`}
+          className={`object-box ${o.selectedBy ? 'linked' : ''} ${practice ? 'practice-object' : ''}`}
           style={
             {
+              zIndex: o.label.toLowerCase() === 'person' ? 0 : 1,
               left: `${o.bbox.x * 100}%`,
               top: `${o.bbox.y * 100}%`,
               width: `${o.bbox.width * 100}%`,
@@ -92,7 +102,11 @@ export function CameraOverlay({
         >
           <span className="object-tag">
             {o.label}
-            <span>{o.id === selectedId ? '↗ LINKED' : ''}</span>
+            <span>
+              {o.selectedBy
+                ? `↗ LINKED ${links.find((l) => l.objectId === o.id)?.label ?? ''}`
+                : ''}
+            </span>
           </span>
           {practice && (
             <span className="object-tone">
@@ -101,7 +115,7 @@ export function CameraOverlay({
             </span>
           )}
           <span className="object-instrument">
-            {o.id === selectedId && o.mode === 'FREE_LONG_NOTE'
+            {o.selectedBy && o.mode === 'FREE_LONG_NOTE'
               ? `MELODY · ${RHYTHM_LABELS[o.subdivision]}`
               : `${INSTRUMENTS[o.instrumentId].name} · ${RHYTHM_LABELS[o.subdivision]}`}
           </span>

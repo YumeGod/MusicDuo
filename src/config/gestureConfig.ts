@@ -1,5 +1,8 @@
 export const GESTURE = {
-  selectThreshold: 0.24,
+  fistSelectThreshold: 0.72,
+  fistReleaseThreshold: 0.45,
+  fistSmoothing: 0.3,
+  gestureExcludedLabels: ['person'],
   releaseThreshold: 0.58,
   selectDwellMs: 180,
   releaseDwellMs: 650,

@@ -56,11 +56,11 @@ void test('same-class objects receive distinct persistent identities', () => {
     first.map((o) => o.id),
   );
 });
-void test('one noisy pinch cannot select; dwell can', () => {
+void test('one noisy fist cannot select; dwell can', () => {
   const m = new ObjectSelectionManager(),
     o = objects();
   m.update(hand(), o, 1000);
-  assert.equal(m.machine.state, 'PINCHING');
+  assert.equal(m.machine.state, 'GRABBING');
   m.update(hand({ isSelecting: false }), o, 1100);
   assert.equal(m.selectedId, undefined);
   m.update(hand(), o, 1200);

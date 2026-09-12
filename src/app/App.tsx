@@ -55,6 +55,7 @@ const initial: Snapshot = {
   status: 'Your surroundings. Your sound.',
   objects: [],
   hands: [],
+  links: [],
   harmony: new ChordProgressionEngine().state(),
   interaction: 'IDLE',
   notice: '',
@@ -144,8 +145,9 @@ export default function MusicDuo() {
                   assigned.
                 </p>
                 <p>
-                  <b>02 · Link an object</b>Pinch your left thumb and index
-                  finger over its box. Hold briefly until you see LINKED.
+                  <b>02 · Link an object</b>Move either palm over its box, make
+                  a fist, and hold briefly until you see LINKED. People can only
+                  be linked by clicking or tapping.
                 </p>
                 <p>
                   <b>03 · Shape the music</b>Spread your fingers for longer
@@ -153,8 +155,9 @@ export default function MusicDuo() {
                   then move up and down. Close your hand to return to the chord.
                 </p>
                 <p>
-                  <b>04 · Play together</b>Your right hand controls the whole
-                  mix: open your palm for reverb; separate thumb and index for
+                  <b>04 · Play together</b>Two players can each fist-grab a
+                  different object. An unlinked right hand controls the mix:
+                  open your palm for reverb; separate thumb and index for
                   volume. Open your pinch away from the linked object to detach.
                 </p>
                 <p>
@@ -194,11 +197,11 @@ export default function MusicDuo() {
                   { value: 'AUTO', label: 'Automatic · both hands' },
                   {
                     value: 'GLOBAL_CONTROLLER',
-                    label: 'Player A · Global controller',
+                    label: 'Global controls only',
                   },
                   {
                     value: 'OBJECT_CONTROLLER',
-                    label: 'Player B · Object controller',
+                    label: 'Object controls · all hands',
                   },
                   { value: 'SWAP', label: 'Swap left and right' },
                 ]}
@@ -382,10 +385,10 @@ export default function MusicDuo() {
                     <CameraOverlay
                       objects={s.objects}
                       hands={s.hands}
-                      selectedId={s.selectedId}
+                      links={s.links}
                       skeleton={skeleton}
                       practice={s.practice}
-                      objectHand={s.objectHand}
+
                       onSelect={(id) => controller.current?.select(id)}
                     />
                     {!s.objects.length && (
@@ -438,7 +441,7 @@ export default function MusicDuo() {
                     <span
                       className={`hand-dot ${s.hands.some((h) => h.handedness === 'right') ? 'detected orange' : ''}`}
                     />
-                    Right hand <span className="dim">/ master</span>
+                    Right hand <span className="dim">/ grab or master</span>
                   </span>
                 </div>
               </div>
@@ -580,7 +583,7 @@ export default function MusicDuo() {
                       <Focus size={23} />
                     </span>
                     <p>
-                      <b>Pinch to connect</b>
+                      <b>Fist to connect</b>
                       <span>Grab a sound. Make it yours.</span>
                     </p>
                   </div>
@@ -862,11 +865,11 @@ export default function MusicDuo() {
                     { value: 'SWAP', label: 'Swap left and right' },
                     {
                       value: 'GLOBAL_CONTROLLER',
-                      label: 'Player A · global controls',
+                      label: 'Global controls only',
                     },
                     {
                       value: 'OBJECT_CONTROLLER',
-                      label: 'Player B · object controls',
+                      label: 'Object controls · all hands',
                     },
                   ]}
                   onChange={(v) => {
